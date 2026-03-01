@@ -2,14 +2,20 @@ package app
 
 import (
 	"fmt"
+	"net"
+	"net/http"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/gregory-m/nanit/pkg/baby"
 	"github.com/gregory-m/nanit/pkg/client"
 	"github.com/gregory-m/nanit/pkg/message"
 	"github.com/gregory-m/nanit/pkg/mqtt"
+	"github.com/gregory-m/nanit/pkg/onvif"
 	"github.com/gregory-m/nanit/pkg/rtmpserver"
+	"github.com/gregory-m/nanit/pkg/rtspserver"
 	"github.com/gregory-m/nanit/pkg/session"
 	"github.com/gregory-m/nanit/pkg/utils"
 )
@@ -52,9 +58,44 @@ func (app *App) Run(ctx utils.GracefulContext) {
 	// Fetches babies info if they are not present in session
 	app.RestClient.EnsureBabies()
 
+	// RTSP
+	var rtspSrv *rtspserver.RTSPServer
+	if app.Opts.RTSP != nil {
+		rtspSrv = rtspserver.NewRTSPServer(app.Opts.RTSP.ListenAddr)
+		if err := rtspSrv.Start(); err != nil {
+			log.Fatal().Err(err).Msg("Failed to start RTSP server")
+		}
+		defer rtspSrv.Close()
+	}
+
+	// ONVIF (requires RTSP to be enabled — ONVIF points clients to RTSP URLs)
+	if app.Opts.ONVIF != nil && rtspSrv != nil {
+		_, rtspPort, err := net.SplitHostPort(app.Opts.RTSP.ListenAddr)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Failed to parse RTSP listen address for ONVIF")
+		}
+		handler := onvif.NewHandler(onvif.ServerConfig{
+			RTSPPort: rtspPort,
+			GetBabies: func() []baby.Baby {
+				return app.SessionStore.Session.Babies
+			},
+		})
+		onvifServer := &http.Server{
+			Addr:    app.Opts.ONVIF.ListenAddr,
+			Handler: handler,
+		}
+		go func() {
+			log.Info().Str("addr", app.Opts.ONVIF.ListenAddr).Msg("ONVIF server started")
+			if err := onvifServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("ONVIF server error")
+			}
+		}()
+		defer onvifServer.Close()
+	}
+
 	// RTMP
 	if app.Opts.RTMP != nil {
-		go rtmpserver.StartRTMPServer(app.Opts.RTMP.ListenAddr, app.BabyStateManager)
+		go rtmpserver.StartRTMPServer(app.Opts.RTMP.ListenAddr, app.BabyStateManager, rtspSrv)
 	}
 
 	// MQTT

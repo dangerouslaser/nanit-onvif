@@ -73,6 +73,18 @@ func main() {
 		}
 	}
 
+	if utils.EnvVarBool("NANIT_RTSP_ENABLED", true) {
+		opts.RTSP = &app.RTSPOpts{
+			ListenAddr: utils.EnvVarStr("NANIT_RTSP_ADDR", ":8554"),
+		}
+	}
+
+	if utils.EnvVarBool("NANIT_ONVIF_ENABLED", true) {
+		opts.ONVIF = &app.ONVIFOpts{
+			ListenAddr: utils.EnvVarStr("NANIT_ONVIF_ADDR", ":8089"),
+		}
+	}
+
 	if utils.EnvVarBool("NANIT_MQTT_ENABLED", false) {
 		opts.MQTT = &mqtt.Opts{
 			BrokerURL:   utils.EnvVarReqStr("NANIT_MQTT_BROKER_URL"),

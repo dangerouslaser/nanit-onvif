@@ -1,8 +1,9 @@
 module github.com/gregory-m/nanit
 
-go 1.14
+go 1.25
 
 require (
+	github.com/bluenviron/gortsplib/v5 v5.4.0
 	github.com/eclipse/paho.mqtt.golang v1.3.0
 	github.com/golang/protobuf v1.4.3
 	github.com/joho/godotenv v1.3.0

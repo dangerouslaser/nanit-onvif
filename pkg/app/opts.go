@@ -14,6 +14,8 @@ type Opts struct {
 	HTTPEnabled      bool
 	MQTT             *mqtt.Opts
 	RTMP             *RTMPOpts
+	RTSP             *RTSPOpts
+	ONVIF            *ONVIFOpts
 	EventPolling     EventPollingOpts
 }
 
@@ -44,6 +46,18 @@ type RTMPOpts struct {
 
 	// Key for this stream
 	Key string
+}
+
+// RTSPOpts - options for RTSP streaming
+type RTSPOpts struct {
+	// IP:Port of the interface on which we should listen
+	ListenAddr string
+}
+
+// ONVIFOpts - options for ONVIF server
+type ONVIFOpts struct {
+	// IP:Port of the interface on which the ONVIF HTTP server should listen
+	ListenAddr string
 }
 
 type EventPollingOpts struct {
