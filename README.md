@@ -158,6 +158,11 @@ See [Developer Notes](docs/developer-notes.md) for architecture details.
 - The camera pushes the stream outbound — it must be able to reach `NANIT_RTMP_ADDR`
 - Sound/motion events require REST API polling (not available via WebSocket)
 
+## Credits
+
+- [gregory-m/nanit](https://github.com/gregory-m/nanit) — Original project this fork is based on. Core architecture including Nanit API client, WebSocket communication, RTMP streaming, MQTT integration, and session management.
+- [AlexxIT/go2rtc](https://github.com/AlexxIT/go2rtc) — ONVIF SOAP response templates and XML helpers adapted from go2rtc's ONVIF server implementation (MIT License).
+
 ## Disclaimer
 
 This program is for personal and educational use. Use at your own risk and follow any applicable terms when communicating with Nanit servers.
