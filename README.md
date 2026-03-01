@@ -1,75 +1,165 @@
 # Nanit Stream Proxy
 
-This is sleepless night induced pet project to restream Nanit Baby Monitor live stream for local viewing.
+Re-stream your Nanit Baby Monitor's live video and audio feed locally via RTSP, with ONVIF support for direct integration with NVRs like Unifi Protect.
 
-This is fork of long time not updated https://gitlab.com/adam.stanek/nanit.
+Fork of the original [nanit](https://gitlab.com/adam.stanek/nanit) project.
 
 ## Features
 
-- Restreaming of live feed to local RTMP server
-- Retrieving sensors data from cam (temperature and humidity) and publishing them over MQTT
-- Graceful authentication session handling
-- Works as a companion for your Home-assistant / Homebridge setup (see [guides](#setup-guides) below)
+- **RTSP server** with H.264 video and AAC audio passthrough
+- **ONVIF server** for plug-and-play NVR integration (Unifi Protect, Scrypted, etc.)
+- **RTMP server** receives the camera's outbound stream
+- **Web dashboard** for authentication, camera status, and sensor monitoring
+- **MQTT** publishing of sensor data (temperature, humidity, sound, motion) for Home Assistant / Homebridge
+- **Web-based login** with MFA support — no interactive terminal needed
 
-## TL;DR
+## Quick Start
+
+### 1. Create a `.env` file
 
 ```bash
+# Your server's LAN IP (must be reachable from the Nanit camera)
+NANIT_RTMP_ADDR=192.168.1.88:1935
 
-
-# Note: use your local IP, reachable from Cam (not 127.0.0.1)
-# Login to your Nanit account and check everything is working
-docker run --rm -it \
-  -v ${HOME}/.nanit-data:/app/data \
-  -e NANIT_RTMP_ADDR=xxx.xxx.xxx.xxx:1935 \
-  -e NANIT_RTMP_PATH=/local \
-  -e NANIT_RTMP_KEY=abc123 \
-  -p 1935:1935 \
-  ghcr.io/gregory-m/nanit /app/bin/nanit -l
-
-# Note: use your local IP, reachable from Cam (not 127.0.0.1)
-# Run it normal mode
-docker run --rm \
-  -v ${HOME}/.nanit-data:/app/data \
-  -e NANIT_RTMP_ADDR=xxx.xxx.xxx.xxx:1935 \
-  -e NANIT_RTMP_PATH=/local \
-  -e NANIT_RTMP_KEY=abc123 \
-  -p 1935:1935 \
-  ghcr.io/gregory-m/nanit
+# ONVIF credentials (for NVR integration)
+NANIT_ONVIF_USERNAME=admin
+NANIT_ONVIF_PASSWORD=your_password
 ```
 
-Open `rtmp://127.0.0.1:1935/local/[your_baby_uid]` in VLC. You will find your baby UID in the log of the running application. (If you provided `NANIT_RTMP_PATH` and `NANIT_RTMP_KEY`, the URL will be `rtmp://127.0.0.1:1935<path>/<key>`).
-### Setup guides
+See [.env.sample](.env.sample) for all options.
 
-- [Home assistant](./docs/home-assistant.md)
+### 2. Start with Docker Compose
+
+```yaml
+services:
+  nanit:
+    container_name: nanit
+    build: .
+    restart: unless-stopped
+    ports:
+      - "1935:1935"   # RTMP (camera push)
+      - "8554:8554"   # RTSP (video output)
+      - "8089:8089"   # ONVIF (NVR discovery)
+      - "8080:8080"   # Web UI dashboard
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+```
+
+```bash
+docker compose up -d
+```
+
+### 3. Log in
+
+Open `http://your-server-ip:8080` and log in with your Nanit account credentials. The dashboard will show your camera status and RTSP URL once authenticated.
+
+Alternatively, set `NANIT_REFRESH_TOKEN` in your `.env` file (obtain one via the `-l` interactive login flag).
+
+## Connecting to the Stream
+
+### RTSP (video + audio)
+
+```
+rtsp://your-server-ip:8554/local/<baby_uid>
+```
+
+The baby UID is shown in the web dashboard and application logs.
+
+### ONVIF (for NVRs)
+
+Point your NVR to the ONVIF service:
+
+```
+http://your-server-ip:8089/onvif/device_service
+```
+
+Enter the `NANIT_ONVIF_USERNAME` and `NANIT_ONVIF_PASSWORD` you configured. The NVR will automatically discover the RTSP stream with video and audio.
+
+### RTMP
+
+```
+rtmp://your-server-ip:1935/local/<baby_uid>
+```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| **General** | | |
+| `NANIT_REFRESH_TOKEN` | | Nanit refresh token (alternative to web login) |
+| `NANIT_SESSION_FILE` | `data/session.json` | Session persistence file |
+| `NANIT_DATA_DIR` | `./data` | Data directory |
+| `NANIT_LOG_LEVEL` | `info` | Log level (trace/debug/info/warn/error/fatal) |
+| **RTMP** | | |
+| `NANIT_RTMP_ENABLED` | `true` | Enable RTMP server |
+| `NANIT_RTMP_ADDR` | *(required)* | Public address reachable from camera (e.g. `192.168.1.88:1935`) |
+| `NANIT_RTMP_PATH` | `/local` | RTMP path |
+| `NANIT_RTMP_KEY` | *(baby UID)* | RTMP stream key |
+| **RTSP** | | |
+| `NANIT_RTSP_ENABLED` | `true` | Enable RTSP server |
+| `NANIT_RTSP_ADDR` | `:8554` | RTSP listen address |
+| **ONVIF** | | |
+| `NANIT_ONVIF_ENABLED` | `true` | Enable ONVIF server |
+| `NANIT_ONVIF_ADDR` | `:8089` | ONVIF listen address |
+| `NANIT_ONVIF_USERNAME` | | ONVIF authentication username |
+| `NANIT_ONVIF_PASSWORD` | | ONVIF authentication password |
+| **Web UI** | | |
+| `NANIT_WEB_ENABLED` | `true` | Enable web dashboard |
+| `NANIT_WEB_ADDR` | `:8080` | Web UI listen address |
+| **MQTT** | | |
+| `NANIT_MQTT_ENABLED` | `false` | Enable MQTT sensor publishing |
+| `NANIT_MQTT_BROKER_URL` | *(required)* | MQTT broker URL (e.g. `tcp://mosquitto:1883`) |
+| `NANIT_MQTT_USERNAME` | | MQTT username |
+| `NANIT_MQTT_PASSWORD` | | MQTT password |
+| `NANIT_MQTT_CLIENT_ID` | `nanit` | MQTT client ID |
+| `NANIT_MQTT_PREFIX` | `nanit` | MQTT topic prefix |
+| **Event Polling** | | |
+| `NANIT_EVENTS_POLLING` | `false` | Enable sound/motion event polling |
+| `NANIT_EVENTS_POLLING_INTERVAL` | `30` | Polling interval in seconds |
+| `NANIT_EVENTS_MESSAGE_TIMEOUT` | `300` | Ignore events older than this (seconds) |
+
+## How It Works
+
+The Nanit camera streams video outbound via RTMP when given a destination URL. This application:
+
+1. Tells the camera to push its RTMP stream to this server
+2. Receives the H.264 video and AAC audio via RTMP
+3. Re-publishes the stream as RTSP with proper RTP packetization
+4. Exposes an ONVIF service so NVRs can auto-discover the camera
+5. Optionally publishes sensor data (temperature, humidity, motion, sound) to MQTT
+
+Camera communication happens over a WebSocket connection to Nanit's API using Protocol Buffers.
+
+## Setup Guides
+
+- [Home Assistant](./docs/home-assistant.md)
 - [Homebridge](./docs/homebridge.md)
 - [Sensors](./docs/sensors.md)
-- [Docker compose](./docs/docker-compose.md)
+- [Docker Compose](./docs/docker-compose.md)
 
-### Further usage
-
-Application is ready to be used in Docker. You can use environment variables for configuration. For more info see [.env.sample](.env.sample).
-## Why?
-
-- I wanted to learn something new on paternity leave (first project in Go!)
-- Nanit iOS application is nice, but I was really disappointed that it cannot properly stream to TV through AirPlay. As anxious parents of our first child we wanted to have it playing in the background on TV when we are in the kitchen, etc. When AirPlaying it from the phone it was really hard to see the little one in portrait mode + the sound was crazy quiet. This helps us around the issue and we don't have to drain our phone batteries.
-
-## How to develop
+## Development
 
 ```bash
 go run cmd/nanit/*.go
 
-# On proto file change
+# Regenerate protobuf (if websocket.proto changes)
 protoc --go_out . --go_opt=paths=source_relative pkg/client/websocket.proto
 
 # Run tests
 go test ./pkg/...
 ```
 
-For some insights see [Developer notes](docs/developer-notes.md).
+See [Developer Notes](docs/developer-notes.md) for architecture details.
+
+## Known Constraints
+
+- Max 2 concurrent WebSocket connections per camera (Nanit returns 403 if exceeded)
+- The camera pushes the stream outbound — it must be able to reach `NANIT_RTMP_ADDR`
+- Sound/motion events require REST API polling (not available via WebSocket)
 
 ## Disclaimer
 
-I made this program solely for learning purposes. Please use it at your own risk and always follow any terms and conditions which might be applied when communicating to Nanit servers.
+This program is for personal and educational use. Use at your own risk and follow any applicable terms when communicating with Nanit servers.
 
-Original code used [WTFPL 2 license](http://sam.zoy.org/wtfpl/COPYING), this fork
-available under MIT license.
+MIT License

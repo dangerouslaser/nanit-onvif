@@ -1,0 +1,21 @@
+{{define "content"}}
+<div class="login-box">
+  <div class="card">
+    <h2>MFA Verification</h2>
+    <div class="mfa-info">A verification code has been sent via {{.Channel}}. Enter it below.</div>
+    {{if .Error}}
+    <div class="error-msg">{{.Error}}</div>
+    {{end}}
+    <form method="POST" action="/login/mfa">
+      <input type="hidden" name="email" value="{{.Email}}">
+      <input type="hidden" name="password" value="{{.Password}}">
+      <input type="hidden" name="mfa_token" value="{{.MFAToken}}">
+      <div class="form-group">
+        <label for="mfa_code">Verification Code</label>
+        <input type="text" id="mfa_code" name="mfa_code" required autofocus autocomplete="one-time-code" inputmode="numeric">
+      </div>
+      <button type="submit" class="btn">Verify</button>
+    </form>
+  </div>
+</div>
+{{end}}

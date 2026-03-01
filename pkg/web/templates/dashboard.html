@@ -1,0 +1,110 @@
+{{define "nav-status"}}
+  {{if .AuthActive}}Session active{{else}}No session{{end}}
+{{end}}
+
+{{define "content"}}
+  {{if not .AuthActive}}
+  <div class="card">
+    <h2>Authentication Required</h2>
+    <p style="margin-bottom:0.75rem;font-size:0.875rem;">No active Nanit session. <a href="/login">Log in</a> to get started, or set <code>NANIT_REFRESH_TOKEN</code> in your environment.</p>
+  </div>
+  {{end}}
+
+  <div class="baby-grid">
+    {{range .Babies}}
+    <div class="card baby-card" data-baby-uid="{{.UID}}">
+      <h3>
+        <span class="status-dot stream-dot {{.StreamClass}}"></span>
+        {{if .Name}}{{.Name}}{{else}}Baby{{end}}
+      </h3>
+      <span class="baby-uid">{{.UID}}</span>
+
+      <div style="margin-top:0.75rem">
+        <div class="status-row">
+          <span class="status-label">Stream</span>
+          <span class="status-value stream-label">{{.StreamState}}</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">WebSocket</span>
+          <span class="status-value ws-label">{{if .WebsocketAlive}}Connected{{else}}Disconnected{{end}}</span>
+        </div>
+        {{if .Temperature}}
+        <div class="status-row">
+          <span class="status-label">Temperature</span>
+          <span class="status-value temp-value">{{.Temperature}}</span>
+        </div>
+        {{end}}
+        {{if .Humidity}}
+        <div class="status-row">
+          <span class="status-label">Humidity</span>
+          <span class="status-value humidity-value">{{.Humidity}}</span>
+        </div>
+        {{end}}
+        {{if .IsNight}}
+        <div class="status-row">
+          <span class="status-label">Night Mode</span>
+          <span class="status-value night-value">{{.IsNight}}</span>
+        </div>
+        {{end}}
+        <div class="status-row">
+          <span class="status-label">Last Motion</span>
+          <span class="status-value motion-value">{{if .LastMotion}}{{.LastMotion}}{{else}}&mdash;{{end}}</span>
+        </div>
+        <div class="status-row">
+          <span class="status-label">Last Sound</span>
+          <span class="status-value sound-value">{{if .LastSound}}{{.LastSound}}{{else}}&mdash;{{end}}</span>
+        </div>
+      </div>
+
+      {{if .RTSPURL}}
+      <div class="rtsp-url">
+        <code>{{.RTSPURL}}</code>
+        <button class="btn-copy" data-copy="{{.RTSPURL}}">Copy</button>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+
+    {{if not .Babies}}
+    <div class="card">
+      <p style="font-size:0.875rem;color:var(--text-muted)">No cameras found. {{if not .AuthActive}}Log in first.{{else}}Waiting for baby list from Nanit API.{{end}}</p>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <h2>Server Info</h2>
+    <div class="info-grid">
+      {{if .RTMPAddr}}
+      <div class="info-item">
+        <span class="label">RTMP</span>
+        <span class="value">{{.RTMPAddr}}</span>
+      </div>
+      {{end}}
+      {{if .RTSPAddr}}
+      <div class="info-item">
+        <span class="label">RTSP</span>
+        <span class="value">{{.RTSPAddr}}</span>
+      </div>
+      {{end}}
+      {{if .ONVIFAddr}}
+      <div class="info-item">
+        <span class="label">ONVIF</span>
+        <span class="value">{{.ONVIFAddr}}</span>
+      </div>
+      {{end}}
+      {{if .ONVIFUser}}
+      <div class="info-item">
+        <span class="label">ONVIF User</span>
+        <span class="value">{{.ONVIFUser}}</span>
+      </div>
+      {{end}}
+      {{if .MQTTBroker}}
+      <div class="info-item">
+        <span class="label">MQTT Broker</span>
+        <span class="value">{{.MQTTBroker}}</span>
+      </div>
+      {{end}}
+    </div>
+  </div>
+{{end}}

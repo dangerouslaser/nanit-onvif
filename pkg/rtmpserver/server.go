@@ -22,6 +22,14 @@ type rtmpHandler struct {
 	broadcastersByUID map[string]*broadcaster
 }
 
+// rtspBridgeState tracks accumulated config for RTSP stream registration.
+type rtspBridgeState struct {
+	sps        []byte
+	pps        []byte
+	aacConfig  []byte
+	registered bool
+}
+
 // StartRTMPServer - Blocking server. If rtspSrv is non-nil, RTMP packets are bridged to RTSP.
 func StartRTMPServer(addr string, babyStateManager *baby.StateManager, rtspSrv *rtspserver.RTSPServer) {
 	lis, err := net.Listen("tcp", addr)
@@ -74,7 +82,7 @@ func (s *rtmpHandler) handleConnection(c *rtmp.Conn, nc net.Conn) {
 
 		s.babyStateManager.Update(babyUID, *baby.NewState().SetStreamState(baby.StreamState_Alive))
 
-		rtspRegistered := false
+		bridgeState := &rtspBridgeState{}
 		for {
 			pkt, err := c.ReadPacket()
 			if err != nil {
@@ -88,7 +96,7 @@ func (s *rtmpHandler) handleConnection(c *rtmp.Conn, nc net.Conn) {
 			}
 
 			publisher.broadcast(pkt)
-			s.bridgeToRTSP(babyUID, pkt, &rtspRegistered)
+			s.bridgeToRTSP(babyUID, pkt, bridgeState)
 		}
 
 	} else {
@@ -163,7 +171,7 @@ func (s *rtmpHandler) closePublisher(babyUID string, b *broadcaster) {
 	b.closeSubscribers()
 }
 
-func (s *rtmpHandler) bridgeToRTSP(babyUID string, pkt av.Packet, rtspRegistered *bool) {
+func (s *rtmpHandler) bridgeToRTSP(babyUID string, pkt av.Packet, state *rtspBridgeState) {
 	if s.rtspServer == nil {
 		return
 	}
@@ -207,14 +215,26 @@ func (s *rtmpHandler) bridgeToRTSP(babyUID string, pkt av.Packet, rtspRegistered
 			return
 		}
 
-		if err := s.rtspServer.RegisterStream(babyUID, sps, pps); err != nil {
-			log.Warn().Err(err).Msg("Failed to register RTSP stream")
+		state.sps = sps
+		state.pps = pps
+		s.registerRTSPStream(babyUID, state)
+
+	case av.AACDecoderConfig:
+		data := pkt.ASeqHdr
+		if len(data) == 0 {
+			data = pkt.Data
+		}
+		if len(data) == 0 {
 			return
 		}
-		*rtspRegistered = true
+		state.aacConfig = data
+		// Re-register with audio if video is already set up
+		if len(state.sps) > 0 {
+			s.registerRTSPStream(babyUID, state)
+		}
 
 	case av.H264:
-		if !*rtspRegistered {
+		if !state.registered {
 			return
 		}
 		nalus, _ := h264.SplitNALUs(pkt.Data)
@@ -223,5 +243,20 @@ func (s *rtmpHandler) bridgeToRTSP(babyUID string, pkt av.Packet, rtspRegistered
 		}
 		pts := pkt.Time + pkt.CTime
 		s.rtspServer.WriteH264(babyUID, nalus, pts)
+
+	case av.AAC:
+		if !state.registered {
+			return
+		}
+		pts := pkt.Time + pkt.CTime
+		s.rtspServer.WriteAAC(babyUID, pkt.Data, pts)
 	}
+}
+
+func (s *rtmpHandler) registerRTSPStream(babyUID string, state *rtspBridgeState) {
+	if err := s.rtspServer.RegisterStream(babyUID, state.sps, state.pps, state.aacConfig); err != nil {
+		log.Warn().Err(err).Msg("Failed to register RTSP stream")
+		return
+	}
+	state.registered = true
 }

@@ -157,6 +157,8 @@ func appendProfile(e *Envelope, tag, name string) {
 	e.Appendf(`<tt:Name>%s</tt:Name>`, name)
 	appendVideoSourceConfiguration(e, "VideoSourceConfiguration", name)
 	appendVideoEncoderConfiguration(e, "VideoEncoderConfiguration")
+	appendAudioSourceConfiguration(e, "AudioSourceConfiguration")
+	appendAudioEncoderConfiguration(e, "AudioEncoderConfiguration")
 	e.Appendf(`</trt:%s>`, tag)
 }
 
@@ -229,6 +231,24 @@ func appendVideoEncoderConfiguration(e *Envelope, tag string) {
 	</tt:%s>`, tag, tag)
 }
 
+func appendAudioSourceConfiguration(e *Envelope, tag string) {
+	e.Appendf(`<tt:%s token="audio_src_cfg">
+	<tt:Name>ASC</tt:Name>
+	<tt:UseCount>1</tt:UseCount>
+	<tt:SourceToken>audio_src</tt:SourceToken>
+</tt:%s>`, tag, tag)
+}
+
+func appendAudioEncoderConfiguration(e *Envelope, tag string) {
+	e.Appendf(`<tt:%s token="audio_enc_cfg">
+	<tt:Name>AEC</tt:Name>
+	<tt:UseCount>1</tt:UseCount>
+	<tt:Encoding>AAC</tt:Encoding>
+	<tt:Bitrate>64</tt:Bitrate>
+	<tt:SampleRate>44100</tt:SampleRate>
+</tt:%s>`, tag, tag)
+}
+
 func GetStreamUriResponse(uri string) []byte {
 	e := NewEnvelope()
 	e.Appendf(`<trt:GetStreamUriResponse><trt:MediaUri><tt:Uri>%s</tt:Uri></trt:MediaUri></trt:GetStreamUriResponse>`, uri)
@@ -280,9 +300,29 @@ var responses = map[string]string{
 	<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef><tt:ScopeItem>onvif://www.onvif.org/type/Network_Video_Transmitter</tt:ScopeItem></tds:Scopes>
 </tds:GetScopesResponse>`,
 
-	MediaGetAudioEncoderConfigurations: `<trt:GetAudioEncoderConfigurationsResponse />`,
-	MediaGetAudioSources:               `<trt:GetAudioSourcesResponse />`,
-	MediaGetAudioSourceConfigurations:   `<trt:GetAudioSourceConfigurationsResponse />`,
+	MediaGetAudioEncoderConfigurations: `<trt:GetAudioEncoderConfigurationsResponse>
+	<trt:Configurations token="audio_enc_cfg">
+		<tt:Name>AEC</tt:Name>
+		<tt:UseCount>1</tt:UseCount>
+		<tt:Encoding>AAC</tt:Encoding>
+		<tt:Bitrate>64</tt:Bitrate>
+		<tt:SampleRate>44100</tt:SampleRate>
+	</trt:Configurations>
+</trt:GetAudioEncoderConfigurationsResponse>`,
+
+	MediaGetAudioSources: `<trt:GetAudioSourcesResponse>
+	<trt:AudioSources token="audio_src">
+		<tt:Channels>1</tt:Channels>
+	</trt:AudioSources>
+</trt:GetAudioSourcesResponse>`,
+
+	MediaGetAudioSourceConfigurations: `<trt:GetAudioSourceConfigurationsResponse>
+	<trt:Configurations token="audio_src_cfg">
+		<tt:Name>ASC</tt:Name>
+		<tt:UseCount>1</tt:UseCount>
+		<tt:SourceToken>audio_src</tt:SourceToken>
+	</trt:Configurations>
+</trt:GetAudioSourceConfigurationsResponse>`,
 
 	MediaGetVideoEncoderConfigurationOptions: `<trt:GetVideoEncoderConfigurationOptionsResponse>
    <trt:Options>

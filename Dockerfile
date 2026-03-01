@@ -8,7 +8,9 @@ FROM alpine
 RUN mkdir -p /app/data
 COPY --from=build /app/bin/nanit /app/bin/nanit
 WORKDIR /app
+EXPOSE 1935
 EXPOSE 8554
 EXPOSE 8089
+EXPOSE 8080
 VOLUME [ "/app/data" ]
 CMD ["/app/bin/nanit"]

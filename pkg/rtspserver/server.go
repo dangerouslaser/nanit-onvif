@@ -10,14 +10,19 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/description"
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtph264"
+	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmpeg4audio"
+	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/rs/zerolog/log"
 )
 
 type streamEntry struct {
-	stream *gortsplib.ServerStream
-	media  *description.Media
-	forma  *format.H264
-	enc    *rtph264.Encoder
+	stream     *gortsplib.ServerStream
+	videoMedia *description.Media
+	videoForma *format.H264
+	videoEnc   *rtph264.Encoder
+	audioMedia *description.Media
+	audioForma *format.MPEG4Audio
+	audioEnc   *rtpmpeg4audio.Encoder
 }
 
 // RTSPServer wraps a gortsplib RTSP server and manages per-baby streams.
@@ -60,8 +65,9 @@ func (s *RTSPServer) Close() {
 	s.server.Close()
 }
 
-// RegisterStream creates a new RTSP stream for the given baby with the provided SPS/PPS.
-func (s *RTSPServer) RegisterStream(babyUID string, sps, pps []byte) error {
+// RegisterStream creates a new RTSP stream for the given baby.
+// If aacConfig is non-nil, an audio track is included alongside video.
+func (s *RTSPServer) RegisterStream(babyUID string, sps, pps, aacConfig []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -71,27 +77,64 @@ func (s *RTSPServer) RegisterStream(babyUID string, sps, pps []byte) error {
 		delete(s.streams, babyUID)
 	}
 
-	forma := &format.H264{
+	videoForma := &format.H264{
 		PayloadTyp:        96,
 		PacketizationMode: 1,
 		SPS:               sps,
 		PPS:               pps,
 	}
 
-	enc, err := forma.CreateEncoder()
+	videoEnc, err := videoForma.CreateEncoder()
 	if err != nil {
 		return err
 	}
 
-	medi := &description.Media{
+	videoMedia := &description.Media{
 		Type:    description.MediaTypeVideo,
-		Formats: []format.Format{forma},
+		Formats: []format.Format{videoForma},
+	}
+
+	entry := &streamEntry{
+		videoMedia: videoMedia,
+		videoForma: videoForma,
+		videoEnc:   videoEnc,
+	}
+
+	medias := []*description.Media{videoMedia}
+
+	// Add audio track if AAC config is provided
+	if len(aacConfig) > 0 {
+		var asc mpeg4audio.AudioSpecificConfig
+		if err := asc.Unmarshal(aacConfig); err != nil {
+			log.Warn().Err(err).Msg("Failed to parse AAC config for RTSP, registering video only")
+		} else {
+			audioForma := &format.MPEG4Audio{
+				PayloadTyp:       97,
+				Config:           &asc,
+				SizeLength:       13,
+				IndexLength:      3,
+				IndexDeltaLength: 3,
+			}
+			audioEnc, err := audioForma.CreateEncoder()
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to create AAC encoder for RTSP, registering video only")
+			} else {
+				audioMedia := &description.Media{
+					Type:    description.MediaTypeAudio,
+					Formats: []format.Format{audioForma},
+				}
+				medias = append(medias, audioMedia)
+				entry.audioMedia = audioMedia
+				entry.audioForma = audioForma
+				entry.audioEnc = audioEnc
+			}
+		}
 	}
 
 	stream := &gortsplib.ServerStream{
 		Server: s.server,
 		Desc: &description.Session{
-			Medias: []*description.Media{medi},
+			Medias: medias,
 		},
 	}
 
@@ -99,14 +142,10 @@ func (s *RTSPServer) RegisterStream(babyUID string, sps, pps []byte) error {
 		return err
 	}
 
-	s.streams[babyUID] = &streamEntry{
-		stream: stream,
-		media:  medi,
-		forma:  forma,
-		enc:    enc,
-	}
+	entry.stream = stream
+	s.streams[babyUID] = entry
 
-	log.Info().Str("baby_uid", babyUID).Msg("RTSP stream registered")
+	log.Info().Str("baby_uid", babyUID).Bool("audio", entry.audioEnc != nil).Msg("RTSP stream registered")
 	return nil
 }
 
@@ -120,7 +159,7 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 		return
 	}
 
-	packets, err := entry.enc.Encode(nalus)
+	packets, err := entry.videoEnc.Encode(nalus)
 	if err != nil {
 		return
 	}
@@ -128,7 +167,30 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 	rtpTimestamp := uint32(pts.Seconds() * 90000)
 	for _, pkt := range packets {
 		pkt.Timestamp = rtpTimestamp
-		entry.stream.WritePacketRTP(entry.media, pkt)
+		entry.stream.WritePacketRTP(entry.videoMedia, pkt)
+	}
+}
+
+// WriteAAC encodes an AAC access unit into RTP and writes it to the stream for the given baby.
+func (s *RTSPServer) WriteAAC(babyUID string, au []byte, pts time.Duration) {
+	s.mu.RLock()
+	entry, ok := s.streams[babyUID]
+	s.mu.RUnlock()
+
+	if !ok || entry.audioEnc == nil {
+		return
+	}
+
+	packets, err := entry.audioEnc.Encode([][]byte{au})
+	if err != nil {
+		return
+	}
+
+	clockRate := entry.audioForma.ClockRate()
+	rtpTimestamp := uint32(pts.Seconds() * float64(clockRate))
+	for _, pkt := range packets {
+		pkt.Timestamp = rtpTimestamp
+		entry.stream.WritePacketRTP(entry.audioMedia, pkt)
 	}
 }
 

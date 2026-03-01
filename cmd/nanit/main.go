@@ -82,6 +82,14 @@ func main() {
 	if utils.EnvVarBool("NANIT_ONVIF_ENABLED", true) {
 		opts.ONVIF = &app.ONVIFOpts{
 			ListenAddr: utils.EnvVarStr("NANIT_ONVIF_ADDR", ":8089"),
+			Username:   utils.EnvVarStr("NANIT_ONVIF_USERNAME", ""),
+			Password:   utils.EnvVarStr("NANIT_ONVIF_PASSWORD", ""),
+		}
+	}
+
+	if utils.EnvVarBool("NANIT_WEB_ENABLED", true) {
+		opts.Web = &app.WebOpts{
+			ListenAddr: utils.EnvVarStr("NANIT_WEB_ADDR", ":8080"),
 		}
 	}
 

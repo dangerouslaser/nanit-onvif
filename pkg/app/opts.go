@@ -16,6 +16,7 @@ type Opts struct {
 	RTMP             *RTMPOpts
 	RTSP             *RTSPOpts
 	ONVIF            *ONVIFOpts
+	Web              *WebOpts
 	EventPolling     EventPollingOpts
 }
 
@@ -57,6 +58,14 @@ type RTSPOpts struct {
 // ONVIFOpts - options for ONVIF server
 type ONVIFOpts struct {
 	// IP:Port of the interface on which the ONVIF HTTP server should listen
+	ListenAddr string
+	Username   string
+	Password   string
+}
+
+// WebOpts - options for the web UI dashboard
+type WebOpts struct {
+	// IP:Port of the interface on which the web UI should listen
 	ListenAddr string
 }
 

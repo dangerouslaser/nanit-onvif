@@ -1,8 +1,13 @@
 services:
   nanit:
+    container_name: nanit
     build: .
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "1935:1935"   # RTMP (camera push)
+      - "8554:8554"   # RTSP (video output)
+      - "8089:8089"   # ONVIF (discovery)
+      - "8080:8080"   # Web UI dashboard
     env_file: .env
     volumes:
       - ./data:/app/data

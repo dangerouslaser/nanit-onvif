@@ -18,6 +18,7 @@ import (
 	"github.com/gregory-m/nanit/pkg/rtspserver"
 	"github.com/gregory-m/nanit/pkg/session"
 	"github.com/gregory-m/nanit/pkg/utils"
+	"github.com/gregory-m/nanit/pkg/web"
 )
 
 // App - application container
@@ -52,11 +53,58 @@ func NewApp(opts Opts) *App {
 
 // Run - application main loop
 func (app *App) Run(ctx utils.GracefulContext) {
+	// Web UI dashboard — start first so login is available even without a session
+	if app.Opts.Web != nil {
+		webConfig := web.Config{
+			SessionStore:     app.SessionStore,
+			BabyStateManager: app.BabyStateManager,
+			RestClient:       app.RestClient,
+		}
+		if app.Opts.RTSP != nil {
+			webConfig.RTSPAddr = app.Opts.RTSP.ListenAddr
+		}
+		if app.Opts.RTMP != nil {
+			webConfig.RTMPAddr = app.Opts.RTMP.PublicAddr
+		}
+		if app.Opts.ONVIF != nil {
+			webConfig.ONVIFAddr = app.Opts.ONVIF.ListenAddr
+			webConfig.ONVIFUser = app.Opts.ONVIF.Username
+		}
+		if app.Opts.MQTT != nil {
+			webConfig.MQTTBroker = app.Opts.MQTT.BrokerURL
+		}
+		webConfig.OnLogin = func() {
+			for _, babyInfo := range app.SessionStore.Session.Babies {
+				_babyInfo := babyInfo
+				ctx.RunAsChild(func(childCtx utils.GracefulContext) {
+					app.handleBaby(_babyInfo, childCtx)
+				})
+			}
+		}
+		webHandler := web.NewHandler(webConfig)
+		webServer := &http.Server{
+			Addr:    app.Opts.Web.ListenAddr,
+			Handler: webHandler,
+		}
+		go func() {
+			log.Info().Str("addr", app.Opts.Web.ListenAddr).Msg("Web UI server started")
+			if err := webServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("Web UI server error")
+			}
+		}()
+		defer webServer.Close()
+	}
+
 	// Reauthorize if we don't have a token or we assume it is invalid
 	app.RestClient.MaybeAuthorize(false)
 
 	// Fetches babies info if they are not present in session
-	app.RestClient.EnsureBabies()
+	// Skip if no auth token (web login will handle initial auth)
+	if app.SessionStore.Session.AuthToken != "" {
+		app.RestClient.EnsureBabies()
+	} else {
+		log.Warn().Msg("No auth token available. Use the web UI to log in or set NANIT_REFRESH_TOKEN.")
+	}
 
 	// RTSP
 	var rtspSrv *rtspserver.RTSPServer
@@ -79,6 +127,8 @@ func (app *App) Run(ctx utils.GracefulContext) {
 			GetBabies: func() []baby.Baby {
 				return app.SessionStore.Session.Babies
 			},
+			Username: app.Opts.ONVIF.Username,
+			Password: app.Opts.ONVIF.Password,
 		})
 		onvifServer := &http.Server{
 			Addr:    app.Opts.ONVIF.ListenAddr,

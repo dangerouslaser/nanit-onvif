@@ -1,6 +1,8 @@
 package onvif
 
 import (
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,12 +16,16 @@ import (
 type ServerConfig struct {
 	RTSPPort  string             // e.g. "8554"
 	GetBabies func() []baby.Baby // returns current baby list
+	Username  string             // ONVIF auth username (empty = no auth)
+	Password  string             // ONVIF auth password (empty = no auth)
 }
 
 // NewHandler returns an http.Handler that serves ONVIF SOAP requests.
 // Each baby UID maps to one ONVIF profile (ProfileToken = baby UID).
 func NewHandler(config ServerConfig) http.Handler {
 	mux := http.NewServeMux()
+
+	authRequired := config.Username != "" && config.Password != ""
 
 	handle := func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -32,6 +38,17 @@ func NewHandler(config ServerConfig) http.Handler {
 		}
 
 		log.Debug().Str("action", action).Msg("ONVIF request")
+
+		// GetSystemDateAndTime is always unauthenticated per ONVIF spec
+		if authRequired && action != DeviceGetSystemDateAndTime {
+			if !validateWSSecurityAuth(b, config.Username, config.Password) {
+				log.Debug().Str("action", action).Msg("ONVIF: auth failed")
+				w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write(soapAuthFault())
+				return
+			}
+		}
 
 		host := r.Host
 
@@ -129,4 +146,49 @@ func stripPort(hostPort string) string {
 		}
 	}
 	return hostPort
+}
+
+// validateWSSecurityAuth checks the WS-Security UsernameToken from a SOAP request.
+// Supports PasswordDigest (nonce + created + password hashed with SHA-1) and PasswordText.
+func validateWSSecurityAuth(body []byte, expectedUser, expectedPass string) bool {
+	username := FindTagValue(body, "Username")
+	if username != expectedUser {
+		return false
+	}
+
+	password := FindTagValue(body, "Password")
+	if password == "" {
+		return false
+	}
+
+	nonce64 := FindTagValue(body, "Nonce")
+	created := FindTagValue(body, "Created")
+
+	// If nonce and created are present, treat as PasswordDigest
+	if nonce64 != "" && created != "" {
+		nonce, err := base64.StdEncoding.DecodeString(nonce64)
+		if err != nil {
+			return false
+		}
+		h := sha1.New()
+		h.Write(nonce)
+		h.Write([]byte(created))
+		h.Write([]byte(expectedPass))
+		expected := base64.StdEncoding.EncodeToString(h.Sum(nil))
+		return password == expected
+	}
+
+	// Fallback: PasswordText
+	return password == expectedPass
+}
+
+func soapAuthFault() []byte {
+	e := NewEnvelope()
+	e.Append(`<s:Fault>
+	<s:Code><s:Value>s:Sender</s:Value>
+		<s:Subcode><s:Value>wsse:FailedAuthentication</s:Value></s:Subcode>
+	</s:Code>
+	<s:Reason><s:Text xml:lang="en">Authentication failed</s:Text></s:Reason>
+</s:Fault>`)
+	return e.Bytes()
 }

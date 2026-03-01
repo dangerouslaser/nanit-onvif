@@ -55,7 +55,8 @@ func (store *Store) Load() {
 	session := &Session{}
 	jsonErr := json.NewDecoder(f).Decode(session)
 	if jsonErr != nil {
-		log.Fatal().Str("filename", store.Filename).Err(jsonErr).Msg("Unable to decode app session file")
+		log.Warn().Str("filename", store.Filename).Err(jsonErr).Msg("Unable to decode app session file, starting with fresh session")
+		return
 	}
 
 	if session.Revision == Revision {
