@@ -2,10 +2,12 @@ package onvif
 
 import (
 	"crypto/sha1"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -18,7 +20,13 @@ type ServerConfig struct {
 	GetBabies func() []baby.Baby // returns current baby list
 	Username  string             // ONVIF auth username (empty = no auth)
 	Password  string             // ONVIF auth password (empty = no auth)
+
+	// GetSnapshot returns a JPEG-encoded snapshot for the given baby.
+	// If nil, snapshot support is disabled.
+	GetSnapshot func(babyUID string) ([]byte, error)
 }
+
+const snapshotPathPrefix = "/onvif/snapshot/"
 
 // NewHandler returns an http.Handler that serves ONVIF SOAP requests.
 // Each baby UID maps to one ONVIF profile (ProfileToken = baby UID).
@@ -107,8 +115,19 @@ func NewHandler(config ServerConfig) http.Handler {
 			resp = GetStreamUriResponse(uri)
 
 		case MediaGetSnapshotUri:
-			// Snapshots not supported
-			resp = GetSnapshotUriResponse("")
+			if config.GetSnapshot == nil {
+				resp = GetSnapshotUriResponse("")
+			} else {
+				token := FindTagValue(b, "ProfileToken")
+				if token == "" {
+					babies := config.GetBabies()
+					if len(babies) > 0 {
+						token = babies[0].UID
+					}
+				}
+				uri := fmt.Sprintf("http://%s%s%s.jpg", host, snapshotPathPrefix, token)
+				resp = GetSnapshotUriResponse(uri)
+			}
 
 		default:
 			resp = StaticResponse(action)
@@ -120,10 +139,52 @@ func NewHandler(config ServerConfig) http.Handler {
 
 	mux.HandleFunc("/onvif/device_service", handle)
 	mux.HandleFunc("/onvif/media_service", handle)
+
+	if config.GetSnapshot != nil {
+		mux.HandleFunc(snapshotPathPrefix, func(w http.ResponseWriter, r *http.Request) {
+			handleSnapshot(w, r, config, authRequired)
+		})
+	}
+
 	// Some clients probe the root path
 	mux.HandleFunc("/onvif/", handle)
 
 	return mux
+}
+
+func handleSnapshot(w http.ResponseWriter, r *http.Request, config ServerConfig, authRequired bool) {
+	if authRequired && !validateBasicAuth(r, config.Username, config.Password) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="nanit-onvif"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	name := strings.TrimPrefix(r.URL.Path, snapshotPathPrefix)
+	name = strings.TrimSuffix(name, ".jpg")
+	if name == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	jpeg, err := config.GetSnapshot(name)
+	if err != nil {
+		log.Warn().Err(err).Str("baby_uid", name).Msg("ONVIF snapshot failed")
+		http.Error(w, "snapshot unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(jpeg)
+}
+
+func validateBasicAuth(r *http.Request, user, pass string) bool {
+	u, p, ok := r.BasicAuth()
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(u), []byte(user)) == 1 &&
+		subtle.ConstantTimeCompare([]byte(p), []byte(pass)) == 1
 }
 
 func babyNames(config ServerConfig) []string {

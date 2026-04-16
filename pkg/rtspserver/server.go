@@ -3,6 +3,7 @@ package rtspserver
 import (
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5"
@@ -15,14 +16,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var annexBStartCode = []byte{0x00, 0x00, 0x00, 0x01}
+
 type streamEntry struct {
-	stream     *gortsplib.ServerStream
-	videoMedia *description.Media
-	videoForma *format.H264
-	videoEnc   *rtph264.Encoder
-	audioMedia *description.Media
-	audioForma *format.MPEG4Audio
-	audioEnc   *rtpmpeg4audio.Encoder
+	stream       *gortsplib.ServerStream
+	videoMedia   *description.Media
+	videoForma   *format.H264
+	videoEnc     *rtph264.Encoder
+	audioMedia   *description.Media
+	audioForma   *format.MPEG4Audio
+	audioEnc     *rtpmpeg4audio.Encoder
+	lastKeyframe atomic.Value // []byte: annex-B SPS+PPS+IDR access unit
 }
 
 // RTSPServer wraps a gortsplib RTSP server and manages per-baby streams.
@@ -159,6 +163,10 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 		return
 	}
 
+	if containsIDR(nalus) {
+		entry.lastKeyframe.Store(buildAnnexBKeyframe(entry.videoForma.SPS, entry.videoForma.PPS, nalus))
+	}
+
 	packets, err := entry.videoEnc.Encode(nalus)
 	if err != nil {
 		return
@@ -169,6 +177,64 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 		pkt.Timestamp = rtpTimestamp
 		entry.stream.WritePacketRTP(entry.videoMedia, pkt)
 	}
+}
+
+// GetKeyframe returns the most recent H.264 IDR access unit (annex-B encoded
+// SPS+PPS+IDR) for the given baby, if any has been observed.
+func (s *RTSPServer) GetKeyframe(babyUID string) ([]byte, bool) {
+	s.mu.RLock()
+	entry, ok := s.streams[babyUID]
+	s.mu.RUnlock()
+
+	if !ok {
+		return nil, false
+	}
+
+	v := entry.lastKeyframe.Load()
+	if v == nil {
+		return nil, false
+	}
+	kf, _ := v.([]byte)
+	if len(kf) == 0 {
+		return nil, false
+	}
+	return kf, true
+}
+
+func containsIDR(nalus [][]byte) bool {
+	for _, n := range nalus {
+		if len(n) > 0 && n[0]&0x1F == 5 {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAnnexBKeyframe(sps, pps []byte, nalus [][]byte) []byte {
+	size := 0
+	if len(sps) > 0 {
+		size += len(annexBStartCode) + len(sps)
+	}
+	if len(pps) > 0 {
+		size += len(annexBStartCode) + len(pps)
+	}
+	for _, n := range nalus {
+		size += len(annexBStartCode) + len(n)
+	}
+	buf := make([]byte, 0, size)
+	if len(sps) > 0 {
+		buf = append(buf, annexBStartCode...)
+		buf = append(buf, sps...)
+	}
+	if len(pps) > 0 {
+		buf = append(buf, annexBStartCode...)
+		buf = append(buf, pps...)
+	}
+	for _, n := range nalus {
+		buf = append(buf, annexBStartCode...)
+		buf = append(buf, n...)
+	}
+	return buf
 }
 
 // WriteAAC encodes an AAC access unit into RTP and writes it to the stream for the given baby.

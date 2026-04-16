@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/gregory-m/nanit/pkg/rtmpserver"
 	"github.com/gregory-m/nanit/pkg/rtspserver"
 	"github.com/gregory-m/nanit/pkg/session"
+	"github.com/gregory-m/nanit/pkg/snapshot"
 	"github.com/gregory-m/nanit/pkg/utils"
 	"github.com/gregory-m/nanit/pkg/web"
 )
@@ -122,6 +124,7 @@ func (app *App) Run(ctx utils.GracefulContext) {
 		if err != nil {
 			log.Fatal().Err(err).Msg("Failed to parse RTSP listen address for ONVIF")
 		}
+		snapshotGen := snapshot.NewGenerator(rtspSrv)
 		handler := onvif.NewHandler(onvif.ServerConfig{
 			RTSPPort: rtspPort,
 			GetBabies: func() []baby.Baby {
@@ -129,6 +132,9 @@ func (app *App) Run(ctx utils.GracefulContext) {
 			},
 			Username: app.Opts.ONVIF.Username,
 			Password: app.Opts.ONVIF.Password,
+			GetSnapshot: func(babyUID string) ([]byte, error) {
+				return snapshotGen.Generate(context.Background(), babyUID)
+			},
 		})
 		onvifServer := &http.Server{
 			Addr:    app.Opts.ONVIF.ListenAddr,
