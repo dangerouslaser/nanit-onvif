@@ -31,6 +31,7 @@ func serve(babies []baby.Baby, dataDir DataDirectories) {
 	// Dummy log handler - useful for receiving logs from cam
 	// Note: Cam is sending tared archive through curl as binary file
 	// TODO: proper handling of Expect: 100-continue
+	const maxLogBytes = 64 << 20 // 64 MiB cap on an uploaded camlog archive
 	http.HandleFunc("/log", func(w http.ResponseWriter, r *http.Request) {
 		filename := filepath.Join(dataDir.LogDir, fmt.Sprintf("camlogs-%v.tar.gz", time.Now().Format(time.RFC3339)))
 
@@ -40,15 +41,15 @@ func serve(babies []baby.Baby, dataDir DataDirectories) {
 		out, err := os.Create(filename)
 		if err != nil {
 			log.Error().Str("file", filename).Err(err).Msg("Unable to create file")
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
-
 		defer out.Close()
 
-		_, err = io.Copy(out, r.Body)
-
-		if err != nil {
+		body := http.MaxBytesReader(w, r.Body, maxLogBytes)
+		if _, err = io.Copy(out, body); err != nil {
 			log.Error().Str("file", filename).Err(err).Msg("Unable to save received log file")
-			w.WriteHeader(http.StatusInternalServerError)
+			http.Error(w, "upload failed", http.StatusInternalServerError)
 			return
 		}
 

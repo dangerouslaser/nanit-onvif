@@ -79,18 +79,19 @@ func (conn *WebsocketConnection) SendRequest(reqType RequestType, requestData *R
 		Request: requestData,
 	}
 
-	// Response handling
+	// Response handling. done is closed once the awaiter is giving up or
+	// has received a value; the handler uses it as an escape so a late
+	// response never sends on a dead channel.
 	resC := make(chan *Response, 1)
+	done := make(chan struct{})
 
 	conn.resHandlersMu.Lock()
 	conn.resHandlers[id] = unhandledRequest{
 		Request: m.Request,
 		HandleResponse: func(res *Response) {
 			select {
-			case <-resC:
-				return // Channel already closed (ie. timeout)
-			default:
-				resC <- res
+			case resC <- res:
+			case <-done:
 			}
 		},
 	}
@@ -102,14 +103,23 @@ func (conn *WebsocketConnection) SendRequest(reqType RequestType, requestData *R
 	// Return awaiter
 	return func(timeout time.Duration) (*Response, error) {
 		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+
+		finish := func() {
+			// Remove the map entry and signal the handler to stop;
+			// idempotent if handleResponse already removed the entry.
+			conn.resHandlersMu.Lock()
+			delete(conn.resHandlers, id)
+			conn.resHandlersMu.Unlock()
+			close(done)
+		}
 
 		select {
 		case <-timer.C:
-			close(resC)
+			finish()
 			return nil, errors.New("Request timeout")
 		case res := <-resC:
-			close(resC)
-			timer.Stop()
+			finish()
 
 			if res.StatusCode == nil {
 				return res, errors.New("No status code received")

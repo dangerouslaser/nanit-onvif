@@ -6,16 +6,24 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
+	"sync"
 	"time"
 )
 
 // Utility functions ported from go2rtc (MIT License).
 // Client-side discovery functions (DiscoveryStreamingDevices, etc.) removed — not needed for server.
 
+var tagRegexCache sync.Map // map[string]*regexp.Regexp
+
 // FindTagValue extracts the text content of an XML tag, supporting namespace prefixes.
 func FindTagValue(b []byte, tag string) string {
-	re := regexp.MustCompile(`(?s)<(?:\w+:)?` + tag + `\b[^>]*>([^<]+)`)
+	var re *regexp.Regexp
+	if v, ok := tagRegexCache.Load(tag); ok {
+		re = v.(*regexp.Regexp)
+	} else {
+		re = regexp.MustCompile(`(?s)<(?:\w+:)?` + tag + `\b[^>]*>([^<]+)`)
+		tagRegexCache.Store(tag, re)
+	}
 	m := re.FindSubmatch(b)
 	if len(m) != 2 {
 		return ""
@@ -35,17 +43,6 @@ func randHexString(n int) string {
 		panic(err)
 	}
 	return hex.EncodeToString(b)[:n]
-}
-
-func atoi(s string) int {
-	if s == "" {
-		return 0
-	}
-	i, err := strconv.Atoi(s)
-	if err != nil {
-		return -1
-	}
-	return i
 }
 
 // GetPosixTZ converts the current time zone to POSIX TZ format.

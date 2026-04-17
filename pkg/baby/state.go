@@ -1,10 +1,6 @@
 package baby
 
 import (
-	reflect "reflect"
-	"regexp"
-	"strings"
-
 	"github.com/rs/zerolog"
 )
 
@@ -44,77 +40,105 @@ func NewState() *State {
 }
 
 // Merge - Merges non-nil values of an argument to the state.
-// Returns ptr to new state if changes
-// Returns ptr to old state if not changed
-func (state *State) Merge(stateUpdate *State) *State {
-	newState := &State{}
+// Returns ptr to new state if changes, ptr to old state if not changed.
+func (state *State) Merge(u *State) *State {
 	changed := false
+	out := *state // shallow copy: pointer fields are aliased until we rewrite them
 
-	currReflect := reflect.ValueOf(state).Elem()
-	newReflect := reflect.ValueOf(newState).Elem()
-	patchReflect := reflect.ValueOf(stateUpdate).Elem()
+	mergeStreamState(&out.StreamState, u.StreamState, &changed)
+	mergeStreamRequestState(&out.StreamRequestState, u.StreamRequestState, &changed)
+	mergeBool(&out.IsWebsocketAlive, u.IsWebsocketAlive, &changed)
+	mergeInt32(&out.MotionTimestamp, u.MotionTimestamp, &changed)
+	mergeInt32(&out.SoundTimestamp, u.SoundTimestamp, &changed)
+	mergeBool(&out.Temperature, u.Temperature, &changed)
+	mergeBool(&out.IsNight, u.IsNight, &changed)
+	mergeInt32(&out.TemperatureMilli, u.TemperatureMilli, &changed)
+	mergeInt32(&out.HumidityMilli, u.HumidityMilli, &changed)
 
-	for i := 0; i < currReflect.NumField(); i++ {
-		currField := currReflect.Field(i)
-		newField := newReflect.Field(i)
-		patchField := patchReflect.Field(i)
-
-		if currField.Type().Kind() == reflect.Ptr {
-			if !patchField.IsNil() && (currField.IsNil() || currField.Elem().Interface() != patchField.Elem().Interface()) {
-				changed = true
-				ptr := reflect.New(patchField.Type().Elem())
-				ptr.Elem().Set(patchField.Elem())
-				newField.Set(ptr)
-			} else {
-				newField.Set(currField)
-			}
-		}
+	if !changed {
+		return state
 	}
-
-	if changed {
-		return newState
-	}
-
-	return state
+	return &out
 }
 
-var upperCaseRX = regexp.MustCompile("[A-Z]+")
+func mergeBool(dst **bool, src *bool, changed *bool) {
+	if src == nil {
+		return
+	}
+	if *dst == nil || **dst != *src {
+		v := *src
+		*dst = &v
+		*changed = true
+	}
+}
 
-// AsMap - returns K/V map of non-nil properties
+func mergeInt32(dst **int32, src *int32, changed *bool) {
+	if src == nil {
+		return
+	}
+	if *dst == nil || **dst != *src {
+		v := *src
+		*dst = &v
+		*changed = true
+	}
+}
+
+func mergeStreamState(dst **StreamState, src *StreamState, changed *bool) {
+	if src == nil {
+		return
+	}
+	if *dst == nil || **dst != *src {
+		v := *src
+		*dst = &v
+		*changed = true
+	}
+}
+
+func mergeStreamRequestState(dst **StreamRequestState, src *StreamRequestState, changed *bool) {
+	if src == nil {
+		return
+	}
+	if *dst == nil || **dst != *src {
+		v := *src
+		*dst = &v
+		*changed = true
+	}
+}
+
+// AsMap - returns K/V map of non-nil properties. Internal fields are
+// excluded unless includeInternal is true.
 func (state *State) AsMap(includeInternal bool) map[string]interface{} {
 	m := make(map[string]interface{})
 
-	r := reflect.ValueOf(state).Elem()
-	ts := reflect.TypeOf(*state)
-	t := r.Type()
-	for i := 0; i < r.NumField(); i++ {
-		f := r.Field(i)
-
-		if includeInternal || ts.Field(i).Tag.Get("internal") != "true" {
-
-			if !f.IsNil() && f.Type().Kind() == reflect.Ptr {
-				name := t.Field(i).Name
-				var value interface{}
-
-				if f.Type().Elem().Kind() == reflect.Int32 {
-					value = f.Elem().Int()
-
-					if strings.HasSuffix(name, "Milli") {
-						name = strings.TrimSuffix(name, "Milli")
-						value = float64(value.(int64)) / 1000
-					}
-				} else {
-					value = f.Elem().Interface()
-				}
-
-				name = strings.ToLower(name[0:1]) + name[1:]
-				name = upperCaseRX.ReplaceAllStringFunc(name, func(m string) string {
-					return "_" + strings.ToLower(m)
-				})
-
-				m[name] = value
-			}
+	if includeInternal {
+		if state.StreamState != nil {
+			m["stream_state"] = int64(*state.StreamState)
 		}
+		if state.StreamRequestState != nil {
+			m["stream_request_state"] = int64(*state.StreamRequestState)
+		}
+		if state.IsWebsocketAlive != nil {
+			m["is_websocket_alive"] = *state.IsWebsocketAlive
+		}
+	}
+
+	if state.MotionTimestamp != nil {
+		m["motion_timestamp"] = int64(*state.MotionTimestamp)
+	}
+	if state.SoundTimestamp != nil {
+		m["sound_timestamp"] = int64(*state.SoundTimestamp)
+	}
+	if state.Temperature != nil {
+		m["temperature"] = *state.Temperature
+	}
+	if state.IsNight != nil {
+		m["is_night"] = *state.IsNight
+	}
+	if state.TemperatureMilli != nil {
+		m["temperature"] = float64(*state.TemperatureMilli) / 1000
+	}
+	if state.HumidityMilli != nil {
+		m["humidity"] = float64(*state.HumidityMilli) / 1000
 	}
 
 	return m
@@ -212,7 +236,7 @@ func (state *State) SetTemperature(value bool) *State {
 
 // GetIsWebsocketAlive - safely returns value
 func (state *State) GetIsWebsocketAlive() bool {
-	if state.StreamState != nil {
+	if state.IsWebsocketAlive != nil {
 		return *state.IsWebsocketAlive
 	}
 

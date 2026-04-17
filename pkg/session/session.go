@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -25,17 +26,38 @@ type Session struct {
 	LastSeenMessageTime time.Time   `json:"lastSeenMessageTime"`
 }
 
-// Store - application session store context
+// Store - application session store context. All reads and writes of Session
+// go through Snapshot/Update so the web-login handler and the app goroutines
+// can safely share state.
 type Store struct {
 	Filename string
-	Session  *Session
+
+	mu      sync.Mutex
+	session *Session
 }
 
 // NewSessionStore - constructor
 func NewSessionStore() *Store {
 	return &Store{
-		Session: &Session{Revision: Revision},
+		session: &Session{Revision: Revision},
 	}
+}
+
+// Snapshot returns a value copy of the current session. The returned value
+// is a stable view even if the store is concurrently updated.
+func (store *Store) Snapshot() Session {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return *store.session
+}
+
+// Update applies fn to the live session under the store lock and persists
+// the resulting state to disk (if a filename is configured).
+func (store *Store) Update(fn func(*Session)) {
+	store.mu.Lock()
+	fn(store.session)
+	store.saveLocked()
+	store.mu.Unlock()
 }
 
 // Load - loads previous state from a file
@@ -60,37 +82,45 @@ func (store *Store) Load() {
 	}
 
 	if session.Revision == Revision {
-		store.Session = session
+		store.mu.Lock()
+		store.session = session
+		store.mu.Unlock()
 		log.Info().Str("filename", store.Filename).Msg("Loaded app session from the file")
 	} else {
 		log.Warn().Str("filename", store.Filename).Msg("App session file contains older revision of the state, ignoring")
 	}
-
 }
 
-// Save - stores current data in a file
+// Save persists the current session to disk.
 func (store *Store) Save() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.saveLocked()
+}
+
+func (store *Store) saveLocked() {
 	if store.Filename == "" {
 		return
 	}
 
 	log.Trace().Str("filename", store.Filename).Msg("Storing app session to the file")
 
-	f, err := os.OpenFile(store.Filename, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile(store.Filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		log.Fatal().Str("filename", store.Filename).Err(err).Msg("Unable to open app session file for writing")
+		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to open app session file for writing")
+		return
 	}
 
 	defer f.Close()
 
-	data, jsonErr := json.Marshal(store.Session)
-	if jsonErr != nil {
-		log.Fatal().Str("filename", store.Filename).Err(jsonErr).Msg("Unable to marshal contents of app session file")
+	data, err := json.Marshal(store.session)
+	if err != nil {
+		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to marshal contents of app session file")
+		return
 	}
 
-	_, writeErr := f.Write(data)
-	if writeErr != nil {
-		log.Fatal().Str("filename", store.Filename).Err(writeErr).Msg("Unable to wrote to app session file")
+	if _, err := f.Write(data); err != nil {
+		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to write to app session file")
 	}
 }
 

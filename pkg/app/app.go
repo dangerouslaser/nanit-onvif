@@ -76,7 +76,7 @@ func (app *App) Run(ctx utils.GracefulContext) {
 			webConfig.MQTTBroker = app.Opts.MQTT.BrokerURL
 		}
 		webConfig.OnLogin = func() {
-			for _, babyInfo := range app.SessionStore.Session.Babies {
+			for _, babyInfo := range app.SessionStore.Snapshot().Babies {
 				_babyInfo := babyInfo
 				ctx.RunAsChild(func(childCtx utils.GracefulContext) {
 					app.handleBaby(_babyInfo, childCtx)
@@ -97,13 +97,18 @@ func (app *App) Run(ctx utils.GracefulContext) {
 		defer webServer.Close()
 	}
 
-	// Reauthorize if we don't have a token or we assume it is invalid
-	app.RestClient.MaybeAuthorize(false)
+	// Reauthorize if we don't have a token or we assume it is invalid.
+	// A failure here isn't fatal — the web UI login flow can recover.
+	if err := app.RestClient.MaybeAuthorize(false); err != nil {
+		log.Warn().Err(err).Msg("Initial authorization failed; web UI login required")
+	}
 
 	// Fetches babies info if they are not present in session
 	// Skip if no auth token (web login will handle initial auth)
-	if app.SessionStore.Session.AuthToken != "" {
-		app.RestClient.EnsureBabies()
+	if app.SessionStore.Snapshot().AuthToken != "" {
+		if _, err := app.RestClient.EnsureBabies(); err != nil {
+			log.Warn().Err(err).Msg("Failed to fetch babies; will proceed without them")
+		}
 	} else {
 		log.Warn().Msg("No auth token available. Use the web UI to log in or set NANIT_REFRESH_TOKEN.")
 	}
@@ -128,7 +133,7 @@ func (app *App) Run(ctx utils.GracefulContext) {
 		handler := onvif.NewHandler(onvif.ServerConfig{
 			RTSPPort: rtspPort,
 			GetBabies: func() []baby.Baby {
-				return app.SessionStore.Session.Babies
+				return app.SessionStore.Snapshot().Babies
 			},
 			Username: app.Opts.ONVIF.Username,
 			Password: app.Opts.ONVIF.Password,
@@ -162,7 +167,8 @@ func (app *App) Run(ctx utils.GracefulContext) {
 	}
 
 	// Start reading the data from the stream
-	for _, babyInfo := range app.SessionStore.Session.Babies {
+	babies := app.SessionStore.Snapshot().Babies
+	for _, babyInfo := range babies {
 		_babyInfo := babyInfo
 		ctx.RunAsChild(func(childCtx utils.GracefulContext) {
 			app.handleBaby(_babyInfo, childCtx)
@@ -171,7 +177,7 @@ func (app *App) Run(ctx utils.GracefulContext) {
 
 	// Start serving content over HTTP
 	if app.Opts.HTTPEnabled {
-		go serve(app.SessionStore.Session.Babies, app.Opts.DataDirectories)
+		go serve(babies, app.Opts.DataDirectories)
 	}
 
 	<-ctx.Done()
@@ -180,14 +186,16 @@ func (app *App) Run(ctx utils.GracefulContext) {
 func (app *App) handleBaby(baby baby.Baby, ctx utils.GracefulContext) {
 	if app.Opts.RTMP != nil || app.MQTTConnection != nil {
 		// Websocket connection
-		ws := client.NewWebsocketConnectionManager(baby.UID, baby.CameraUID, app.SessionStore.Session, app.RestClient, app.BabyStateManager)
+		ws := client.NewWebsocketConnectionManager(baby.UID, baby.CameraUID, app.SessionStore, app.RestClient, app.BabyStateManager)
 
 		ws.WithReadyConnection(func(conn *client.WebsocketConnection, childCtx utils.GracefulContext) {
 			app.runWebsocket(baby.UID, conn, childCtx)
 		})
 
 		if app.Opts.EventPolling.Enabled {
-			go app.pollMessages(baby.UID, app.BabyStateManager)
+			ctx.RunAsChild(func(childCtx utils.GracefulContext) {
+				app.pollMessages(baby.UID, app.BabyStateManager, childCtx)
+			})
 		}
 
 		ctx.RunAsChild(func(childCtx utils.GracefulContext) {
@@ -198,23 +206,35 @@ func (app *App) handleBaby(baby baby.Baby, ctx utils.GracefulContext) {
 	<-ctx.Done()
 }
 
-func (app *App) pollMessages(babyUID string, babyStateManager *baby.StateManager) {
-	newMessages := app.RestClient.FetchNewMessages(babyUID, app.Opts.EventPolling.MessageTimeout)
-
-	for _, msg := range newMessages {
-		switch msg.Type {
-		case message.SoundEventMessageType:
-			go babyStateManager.NotifySoundSubscribers(babyUID, time.Time(msg.Time))
-			break
-		case message.MotionEventMessageType:
-			go babyStateManager.NotifyMotionSubscribers(babyUID, time.Time(msg.Time))
-			break
+func (app *App) pollMessages(babyUID string, babyStateManager *baby.StateManager, ctx utils.GracefulContext) {
+	poll := func() {
+		newMessages, err := app.RestClient.FetchNewMessages(babyUID, app.Opts.EventPolling.MessageTimeout)
+		if err != nil {
+			log.Warn().Str("baby_uid", babyUID).Err(err).Msg("Event polling: fetch failed; will retry next tick")
+			return
+		}
+		for _, msg := range newMessages {
+			switch msg.Type {
+			case message.SoundEventMessageType:
+				go babyStateManager.NotifySoundSubscribers(babyUID, time.Time(msg.Time))
+			case message.MotionEventMessageType:
+				go babyStateManager.NotifyMotionSubscribers(babyUID, time.Time(msg.Time))
+			}
 		}
 	}
 
-	// wait for the specified interval
-	time.Sleep(app.Opts.EventPolling.PollingInterval)
-	app.pollMessages(babyUID, babyStateManager)
+	ticker := time.NewTicker(app.Opts.EventPolling.PollingInterval)
+	defer ticker.Stop()
+
+	poll()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			poll()
+		}
+	}
 }
 
 func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, childCtx utils.GracefulContext) {
@@ -303,7 +323,7 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 }
 
 func (app *App) getRemoteStreamURL(babyUID string) string {
-	return fmt.Sprintf("rtmps://media-secured.nanit.com/nanit/%v.%v", babyUID, app.SessionStore.Session.AuthToken)
+	return fmt.Sprintf("rtmps://media-secured.nanit.com/nanit/%v.%v", babyUID, app.SessionStore.Snapshot().AuthToken)
 }
 
 func (app *App) getLocalStreamURL(babyUID string) string {

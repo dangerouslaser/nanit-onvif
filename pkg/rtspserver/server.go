@@ -19,6 +19,10 @@ import (
 var annexBStartCode = []byte{0x00, 0x00, 0x00, 0x01}
 
 type streamEntry struct {
+	// mu serializes stream.Close against WritePacketRTP calls.
+	// gortsplib's ServerStream is not safe against concurrent Close+Write.
+	mu           sync.Mutex
+	closed       bool
 	stream       *gortsplib.ServerStream
 	videoMedia   *description.Media
 	videoForma   *format.H264
@@ -27,6 +31,16 @@ type streamEntry struct {
 	audioForma   *format.MPEG4Audio
 	audioEnc     *rtpmpeg4audio.Encoder
 	lastKeyframe atomic.Value // []byte: annex-B SPS+PPS+IDR access unit
+}
+
+// close tears down the underlying stream under the entry lock.
+func (e *streamEntry) close() {
+	e.mu.Lock()
+	if !e.closed {
+		e.closed = true
+		e.stream.Close()
+	}
+	e.mu.Unlock()
 }
 
 // RTSPServer wraps a gortsplib RTSP server and manages per-baby streams.
@@ -61,11 +75,16 @@ func (s *RTSPServer) Start() error {
 // Close tears down all streams and stops the server.
 func (s *RTSPServer) Close() {
 	s.mu.Lock()
+	entries := make([]*streamEntry, 0, len(s.streams))
 	for uid, entry := range s.streams {
-		entry.stream.Close()
+		entries = append(entries, entry)
 		delete(s.streams, uid)
 	}
 	s.mu.Unlock()
+
+	for _, e := range entries {
+		e.close()
+	}
 	s.server.Close()
 }
 
@@ -75,9 +94,10 @@ func (s *RTSPServer) RegisterStream(babyUID string, sps, pps, aacConfig []byte) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Close existing stream if any
+	// Close existing stream if any. Safe to call under s.mu: writers release
+	// s.mu before taking entry.mu, so there's no lock ordering cycle.
 	if existing, ok := s.streams[babyUID]; ok {
-		existing.stream.Close()
+		existing.close()
 		delete(s.streams, babyUID)
 	}
 
@@ -173,6 +193,11 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 	}
 
 	rtpTimestamp := uint32(pts.Seconds() * 90000)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.closed {
+		return
+	}
 	for _, pkt := range packets {
 		pkt.Timestamp = rtpTimestamp
 		entry.stream.WritePacketRTP(entry.videoMedia, pkt)
@@ -254,6 +279,11 @@ func (s *RTSPServer) WriteAAC(babyUID string, au []byte, pts time.Duration) {
 
 	clockRate := entry.audioForma.ClockRate()
 	rtpTimestamp := uint32(pts.Seconds() * float64(clockRate))
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.closed {
+		return
+	}
 	for _, pkt := range packets {
 		pkt.Timestamp = rtpTimestamp
 		entry.stream.WritePacketRTP(entry.audioMedia, pkt)
@@ -263,11 +293,14 @@ func (s *RTSPServer) WriteAAC(babyUID string, au []byte, pts time.Duration) {
 // UnregisterStream tears down the RTSP stream for the given baby.
 func (s *RTSPServer) UnregisterStream(babyUID string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if entry, ok := s.streams[babyUID]; ok {
-		entry.stream.Close()
+	entry, ok := s.streams[babyUID]
+	if ok {
 		delete(s.streams, babyUID)
+	}
+	s.mu.Unlock()
+
+	if ok {
+		entry.close()
 		log.Info().Str("baby_uid", babyUID).Msg("RTSP stream unregistered")
 	}
 }

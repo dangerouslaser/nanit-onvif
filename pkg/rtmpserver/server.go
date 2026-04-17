@@ -110,20 +110,21 @@ func (s *rtmpHandler) handleConnection(c *rtmp.Conn, nc net.Conn) {
 		}
 
 		closeC := c.CloseNotify()
+		defer unsubscribe()
 		for {
 			select {
-			case pkt, open := <-subscriber.pktC:
-				if !open {
-					sublog.Debug().Msg("Closing subscriber because publisher quit")
-					nc.Close()
-					return
-				}
-
+			case pkt := <-subscriber.pktC:
 				c.WritePacket(pkt)
+
+			case <-subscriber.done:
+				sublog.Debug().Msg("Closing subscriber because publisher quit")
+				nc.Close()
+				return
 
 			case <-closeC:
 				sublog.Debug().Msg("Stream subscriber disconnected")
-				unsubscribe()
+				nc.Close()
+				return
 			}
 		}
 	}

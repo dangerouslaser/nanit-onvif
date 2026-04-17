@@ -27,7 +27,7 @@ type WebsocketConnectionHandler func(*WebsocketConnection, utils.GracefulContext
 type WebsocketConnectionManager struct {
 	BabyUID          string
 	CameraUID        string
-	Session          *session.Session
+	SessionStore     *session.Store
 	API              *NanitClient
 	BabyStateManager *baby.StateManager
 
@@ -37,11 +37,11 @@ type WebsocketConnectionManager struct {
 }
 
 // NewWebsocketConnectionManager - constructor
-func NewWebsocketConnectionManager(babyUID string, cameraUID string, session *session.Session, api *NanitClient, babyStateManager *baby.StateManager) *WebsocketConnectionManager {
+func NewWebsocketConnectionManager(babyUID string, cameraUID string, store *session.Store, api *NanitClient, babyStateManager *baby.StateManager) *WebsocketConnectionManager {
 	manager := &WebsocketConnectionManager{
 		BabyUID:          babyUID,
 		CameraUID:        cameraUID,
-		Session:          session,
+		SessionStore:     store,
 		API:              api,
 		BabyStateManager: babyStateManager,
 	}
@@ -95,11 +95,15 @@ func (manager *WebsocketConnectionManager) RunWithinContext(ctx utils.GracefulCo
 
 func (manager *WebsocketConnectionManager) run(attempt utils.AttemptContext) {
 	// Reauthorize if it is not a first try or we assume we don't have a valid token
-	manager.API.MaybeAuthorize(attempt.GetTry() > 1)
+	if err := manager.API.MaybeAuthorize(attempt.GetTry() > 1); err != nil {
+		log.Error().Err(err).Msg("Authorization failed; websocket connection attempt aborted")
+		attempt.Fail(err)
+		return
+	}
 
 	// Remote
 	url := fmt.Sprintf("wss://api.nanit.com/focus/cameras/%v/user_connect", manager.CameraUID)
-	auth := fmt.Sprintf("Bearer %v", manager.Session.AuthToken)
+	auth := fmt.Sprintf("Bearer %v", manager.SessionStore.Snapshot().AuthToken)
 
 	// Local
 	// url := "wss://192.168.3.195:442"
@@ -168,10 +172,20 @@ func (manager *WebsocketConnectionManager) run(attempt utils.AttemptContext) {
 		log.Debug().Stringer("data", m).Msg("Received message")
 
 		manager.mu.RLock()
-		readyState := manager.readyState
+		rs := manager.readyState
 		manager.mu.RUnlock()
 
-		go readyState.Connection.handleMessage(m)
+		if rs == nil {
+			// Message arrived before OnConnected set up the ready state;
+			// drop it rather than panic.
+			log.Warn().Msg("Received websocket message before ready state; dropping")
+			return
+		}
+
+		// Dispatch inline: gowebsocket already serializes reads on its own
+		// goroutine, and our handlers (sensor merges, keepalive sends) are
+		// cheap — spawning a goroutine per message just bloats the scheduler.
+		rs.Connection.handleMessage(m)
 	}
 
 	log.Trace().Msg("Connecting to websocket")

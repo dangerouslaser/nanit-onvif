@@ -123,7 +123,7 @@ func formatTimestamp(ts *int32) string {
 }
 
 func renderDashboard(w http.ResponseWriter, _ *http.Request, t *template.Template, config Config) {
-	sess := config.SessionStore.Session
+	sess := config.SessionStore.Snapshot()
 	authActive := sess.AuthToken != "" && sess.RefreshToken != ""
 
 	// Use the IP from RTMP public addr (user-configured server IP)
@@ -260,13 +260,20 @@ func handleLogin(w http.ResponseWriter, r *http.Request, pages map[string]*templ
 	}
 
 	// Store the tokens in the session
-	config.SessionStore.Session.RefreshToken = refreshToken
-	config.SessionStore.Save()
+	config.SessionStore.Update(func(s *session.Session) {
+		s.RefreshToken = refreshToken
+	})
 
 	// Also update the rest client's refresh token so it can authorize
 	config.RestClient.RefreshToken = refreshToken
-	config.RestClient.MaybeAuthorize(true)
-	config.RestClient.EnsureBabies()
+	if err := config.RestClient.MaybeAuthorize(true); err != nil {
+		renderLogin(w, pages["login"], email, err.Error())
+		return
+	}
+	if _, err := config.RestClient.EnsureBabies(); err != nil {
+		renderLogin(w, pages["login"], email, err.Error())
+		return
+	}
 
 	if config.OnLogin != nil {
 		config.OnLogin()
@@ -311,12 +318,29 @@ func handleMFA(w http.ResponseWriter, r *http.Request, pages map[string]*templat
 		return
 	}
 
-	config.SessionStore.Session.RefreshToken = refreshToken
-	config.SessionStore.Save()
+	config.SessionStore.Update(func(s *session.Session) {
+		s.RefreshToken = refreshToken
+	})
 
 	config.RestClient.RefreshToken = refreshToken
-	config.RestClient.MaybeAuthorize(true)
-	config.RestClient.EnsureBabies()
+	renderMFAError := func(msg string) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		pages["mfa"].ExecuteTemplate(w, "layout", mfaData{
+			Email:    email,
+			Password: password,
+			MFAToken: mfaToken,
+			Channel:  "SMS",
+			Error:    msg,
+		})
+	}
+	if err := config.RestClient.MaybeAuthorize(true); err != nil {
+		renderMFAError(err.Error())
+		return
+	}
+	if _, err := config.RestClient.EnsureBabies(); err != nil {
+		renderMFAError(err.Error())
+		return
+	}
 
 	if config.OnLogin != nil {
 		config.OnLogin()
@@ -352,7 +376,7 @@ type serverStatusEntry struct {
 }
 
 func handleAPIStatus(w http.ResponseWriter, config Config) {
-	sess := config.SessionStore.Session
+	sess := config.SessionStore.Snapshot()
 	var babies []babyStatusEntry
 	for _, b := range sess.Babies {
 		state := config.BabyStateManager.GetBabyState(b.UID)

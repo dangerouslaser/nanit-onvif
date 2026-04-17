@@ -44,7 +44,11 @@ func (conn *Connection) Run(manager *baby.StateManager, ctx utils.GracefulContex
 func runMqtt(conn *Connection, attempt utils.AttemptContext) {
 	opts := MQTT.NewClientOptions()
 	opts.AddBroker(conn.Opts.BrokerURL)
-	opts.SetClientID(conn.Opts.TopicPrefix)
+	clientID := conn.Opts.ClientID
+	if clientID == "" {
+		clientID = conn.Opts.TopicPrefix
+	}
+	opts.SetClientID(clientID)
 	opts.SetUsername(conn.Opts.Username)
 	opts.SetPassword(conn.Opts.Password)
 	opts.SetCleanSession(false)

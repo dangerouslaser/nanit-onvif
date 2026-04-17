@@ -22,7 +22,6 @@ func Login(email, password, mfaChannel string) (refreshToken string) {
 		fmt.Print("\n")
 		if err != nil {
 			log.Fatal().Err(err).Msg("Can't get credentials")
-			os.Exit(1)
 		}
 	}
 
@@ -37,7 +36,6 @@ func Login(email, password, mfaChannel string) (refreshToken string) {
 		mfaCode, err := getMFACode()
 		if err != nil {
 			log.Fatal().Err(err).Msg("Can't get MFA code")
-			os.Exit(1)
 		}
 
 		if mfaCode == "email" {
@@ -45,8 +43,7 @@ func Login(email, password, mfaChannel string) (refreshToken string) {
 		}
 		_, refreshToken, err = LoginMFA(email, password, mfaErr.MFAToken, mfaCode)
 		if err != nil {
-			log.Fatal().Err(err).Msg("Can't get MFA code")
-			os.Exit(1)
+			log.Fatal().Err(err).Msg("MFA login failed")
 		}
 
 	} else if err != nil {

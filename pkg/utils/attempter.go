@@ -35,6 +35,7 @@ var lastPerseveranceRunnerID int32 = 0
 func RunWithPerseverance(handler func(AttemptContext), ctx GracefulContext, opts PerseverenceOpts) {
 	try := 1
 	timer := time.NewTimer(0)
+	defer timer.Stop()
 	runnerID := fmt.Sprintf("runner%v", atomic.AddInt32(&lastPerseveranceRunnerID, 1))
 	if opts.RunnerID != "" {
 		runnerID = opts.RunnerID
@@ -46,7 +47,6 @@ func RunWithPerseverance(handler func(AttemptContext), ctx GracefulContext, opts
 		select {
 		case <-ctx.Done():
 			sublog.Trace().Msg("Perseverance run cancelled, there will be no further attempts")
-			timer.Stop()
 			return
 		case timeScheduled := <-timer.C:
 			hasBeenCancelled, err := ctx.RunAsChild(func(childGracefulCtx GracefulContext) {
@@ -56,7 +56,6 @@ func RunWithPerseverance(handler func(AttemptContext), ctx GracefulContext, opts
 
 			if hasBeenCancelled {
 				sublog.Trace().Msg("Perseverance run cancelled in the middle of execution, there will be no further attempts")
-				timer.Stop()
 				return
 			}
 

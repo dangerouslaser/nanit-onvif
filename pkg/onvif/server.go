@@ -44,9 +44,10 @@ const (
 	MediaGetVideoSourceConfigurations        = "GetVideoSourceConfigurations"
 )
 
+var requestActionRX = regexp.MustCompile(`Body[^<]+<([^ />]+)`)
+
 func GetRequestAction(b []byte) string {
-	re := regexp.MustCompile(`Body[^<]+<([^ />]+)`)
-	m := re.FindSubmatch(b)
+	m := requestActionRX.FindSubmatch(b)
 	if len(m) != 2 {
 		return ""
 	}

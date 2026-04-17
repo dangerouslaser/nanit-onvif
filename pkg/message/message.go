@@ -20,7 +20,7 @@ type Message struct {
 
 // FilterMessages allows a slice (?) of Messages to be filtered by an aribitrary function that returns true or false for each element, indicating whether it should be included in the filtered set or not
 func FilterMessages(messages []Message, cond func(message Message) bool) []Message {
-	var result []Message
+	result := make([]Message, 0, len(messages))
 	for i := range messages {
 		if cond(messages[i]) {
 			result = append(result, messages[i])
