@@ -97,10 +97,15 @@ func runMqtt(conn *Connection, attempt utils.AttemptContext) {
 		}
 	}
 
+	// Retained so HA subscribers pick up the last-known value on subscribe
+	// instead of showing "unknown" until the next state change. Works for
+	// both slow-moving fields (firmware_version) and sticky booleans
+	// (motion_detected, is_stream_alive) that should survive across HA or
+	// broker restarts.
 	publish := func(key string, value interface{}, babyUID string) {
 		topic := fmt.Sprintf("%v/babies/%v/%v", conn.Opts.TopicPrefix, babyUID, key)
 		log.Trace().Str("topic", topic).Interface("value", value).Msg("MQTT publish")
-		token := client.Publish(topic, 0, false, fmt.Sprintf("%v", value))
+		token := client.Publish(topic, 0, true, fmt.Sprintf("%v", value))
 		if token.Wait(); token.Error() != nil {
 			log.Error().Err(token.Error()).Msgf("Unable to publish %v update", key)
 		}

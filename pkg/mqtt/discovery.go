@@ -138,14 +138,8 @@ func discoveryConfigs(topicPrefix, babyUID, babyName string, commands bool) []di
 			EntityCategory: "diagnostic",
 			Availability:   availability, Device: device,
 		}},
-		{"binary_sensor", "is_connected_to_server", haEntityBase{
-			Name: "Cloud connection", UniqueID: uid("is_connected_to_server"),
-			StateTopic:  stateTopic("is_connected_to_server"),
-			DeviceClass: "connectivity",
-			PayloadOn:   "true", PayloadOff: "false",
-			EntityCategory: "diagnostic",
-			Availability:   availability, Device: device,
-		}},
+		// Note: no is_connected_to_server entity — the camera doesn't reliably
+		// emit Status.connectionToServer, so it would just sit on "unknown".
 		writableNumber(commands, "volume", "Volume", "%", "mdi:volume-high", "",
 			0, 100, 1, stateTopic, commandTopic, uid, availability, device),
 		writableNumber(commands, "night_light_timeout", "Night light timeout", "s", "mdi:timer",
