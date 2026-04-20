@@ -24,6 +24,9 @@ type ServerConfig struct {
 	// GetSnapshot returns a JPEG-encoded snapshot for the given baby.
 	// If nil, snapshot support is disabled.
 	GetSnapshot func(babyUID string) ([]byte, error)
+
+	// Events, if non-nil, enables the ONVIF Events service (PullPoint only).
+	Events *EventManager
 }
 
 const snapshotPathPrefix = "/onvif/snapshot/"
@@ -70,7 +73,17 @@ func NewHandler(config ServerConfig) http.Handler {
 			resp = GetServicesResponse(host)
 
 		case DeviceGetDeviceInformation:
-			resp = GetDeviceInformationResponse("Nanit", "Baby Monitor", "1.0", UUID())
+			// Stable serial based on the first baby's UID so HA's ONVIF
+			// integration identifies the device consistently across restarts.
+			serial := UUID()
+			babies := config.GetBabies()
+			if len(babies) > 0 {
+				serial = babies[0].UID
+			}
+			resp = GetDeviceInformationResponse("Nanit", "Baby Monitor", "1.0", serial)
+
+		case DeviceGetNetworkInterfaces:
+			resp = GetNetworkInterfacesResponse(config.GetBabies())
 
 		case MediaGetProfiles:
 			resp = GetProfilesResponse(babyNames(config))
@@ -139,6 +152,35 @@ func NewHandler(config ServerConfig) http.Handler {
 
 	mux.HandleFunc("/onvif/device_service", handle)
 	mux.HandleFunc("/onvif/media_service", handle)
+
+	if config.Events != nil {
+		mux.HandleFunc("/onvif/events_service", func(w http.ResponseWriter, r *http.Request) {
+			if authRequired {
+				b, _ := io.ReadAll(r.Body)
+				if !validateWSSecurityAuth(b, config.Username, config.Password) {
+					w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+					w.WriteHeader(http.StatusUnauthorized)
+					w.Write(soapAuthFault())
+					return
+				}
+				r.Body = io.NopCloser(strings.NewReader(string(b)))
+			}
+			config.Events.HandleEventsService(w, r, r.Host)
+		})
+		mux.HandleFunc("/onvif/events/subscription/", func(w http.ResponseWriter, r *http.Request) {
+			if authRequired {
+				b, _ := io.ReadAll(r.Body)
+				if !validateWSSecurityAuth(b, config.Username, config.Password) {
+					w.Header().Set("Content-Type", "application/soap+xml; charset=utf-8")
+					w.WriteHeader(http.StatusUnauthorized)
+					w.Write(soapAuthFault())
+					return
+				}
+				r.Body = io.NopCloser(strings.NewReader(string(b)))
+			}
+			config.Events.HandleSubscription(w, r)
+		})
+	}
 
 	if config.GetSnapshot != nil {
 		mux.HandleFunc(snapshotPathPrefix, func(w http.ResponseWriter, r *http.Request) {

@@ -28,10 +28,30 @@ type State struct {
 
 	MotionTimestamp  *int32 // int32 is used to represent UTC timestamp
 	SoundTimestamp   *int32 // int32 is used to represent UTC timestamp
+	MotionDetected   *bool
+	SoundDetected    *bool
 	Temperature      *bool
 	IsNight          *bool
 	TemperatureMilli *int32
 	HumidityMilli    *int32
+	LightLevel       *int32
+
+	// Control state
+	NightLightOn         *bool
+	NightLightTimeoutSec *int32
+
+	// Settings state
+	NightVision   *bool
+	SleepMode     *bool
+	StatusLightOn *bool
+	MicMuteOn     *bool
+	Volume        *int32
+	MountingMode  *int32
+
+	// Status state
+	FirmwareVersion     *string
+	HardwareVersion     *string
+	IsConnectedToServer *bool
 }
 
 // NewState - constructor
@@ -50,10 +70,24 @@ func (state *State) Merge(u *State) *State {
 	mergeBool(&out.IsWebsocketAlive, u.IsWebsocketAlive, &changed)
 	mergeInt32(&out.MotionTimestamp, u.MotionTimestamp, &changed)
 	mergeInt32(&out.SoundTimestamp, u.SoundTimestamp, &changed)
+	mergeBool(&out.MotionDetected, u.MotionDetected, &changed)
+	mergeBool(&out.SoundDetected, u.SoundDetected, &changed)
 	mergeBool(&out.Temperature, u.Temperature, &changed)
 	mergeBool(&out.IsNight, u.IsNight, &changed)
 	mergeInt32(&out.TemperatureMilli, u.TemperatureMilli, &changed)
 	mergeInt32(&out.HumidityMilli, u.HumidityMilli, &changed)
+	mergeInt32(&out.LightLevel, u.LightLevel, &changed)
+	mergeBool(&out.NightLightOn, u.NightLightOn, &changed)
+	mergeInt32(&out.NightLightTimeoutSec, u.NightLightTimeoutSec, &changed)
+	mergeBool(&out.NightVision, u.NightVision, &changed)
+	mergeBool(&out.SleepMode, u.SleepMode, &changed)
+	mergeBool(&out.StatusLightOn, u.StatusLightOn, &changed)
+	mergeBool(&out.MicMuteOn, u.MicMuteOn, &changed)
+	mergeInt32(&out.Volume, u.Volume, &changed)
+	mergeInt32(&out.MountingMode, u.MountingMode, &changed)
+	mergeString(&out.FirmwareVersion, u.FirmwareVersion, &changed)
+	mergeString(&out.HardwareVersion, u.HardwareVersion, &changed)
+	mergeBool(&out.IsConnectedToServer, u.IsConnectedToServer, &changed)
 
 	if !changed {
 		return state
@@ -62,6 +96,17 @@ func (state *State) Merge(u *State) *State {
 }
 
 func mergeBool(dst **bool, src *bool, changed *bool) {
+	if src == nil {
+		return
+	}
+	if *dst == nil || **dst != *src {
+		v := *src
+		*dst = &v
+		*changed = true
+	}
+}
+
+func mergeString(dst **string, src *string, changed *bool) {
 	if src == nil {
 		return
 	}
@@ -128,6 +173,12 @@ func (state *State) AsMap(includeInternal bool) map[string]interface{} {
 	if state.SoundTimestamp != nil {
 		m["sound_timestamp"] = int64(*state.SoundTimestamp)
 	}
+	if state.MotionDetected != nil {
+		m["motion_detected"] = *state.MotionDetected
+	}
+	if state.SoundDetected != nil {
+		m["sound_detected"] = *state.SoundDetected
+	}
 	if state.Temperature != nil {
 		m["temperature"] = *state.Temperature
 	}
@@ -139,6 +190,42 @@ func (state *State) AsMap(includeInternal bool) map[string]interface{} {
 	}
 	if state.HumidityMilli != nil {
 		m["humidity"] = float64(*state.HumidityMilli) / 1000
+	}
+	if state.LightLevel != nil {
+		m["light_level"] = int64(*state.LightLevel)
+	}
+	if state.NightLightOn != nil {
+		m["night_light_on"] = *state.NightLightOn
+	}
+	if state.NightLightTimeoutSec != nil {
+		m["night_light_timeout"] = int64(*state.NightLightTimeoutSec)
+	}
+	if state.NightVision != nil {
+		m["night_vision"] = *state.NightVision
+	}
+	if state.SleepMode != nil {
+		m["sleep_mode"] = *state.SleepMode
+	}
+	if state.StatusLightOn != nil {
+		m["status_light_on"] = *state.StatusLightOn
+	}
+	if state.MicMuteOn != nil {
+		m["mic_mute_on"] = *state.MicMuteOn
+	}
+	if state.Volume != nil {
+		m["volume"] = int64(*state.Volume)
+	}
+	if state.MountingMode != nil {
+		m["mounting_mode"] = int64(*state.MountingMode)
+	}
+	if state.FirmwareVersion != nil {
+		m["firmware_version"] = *state.FirmwareVersion
+	}
+	if state.HardwareVersion != nil {
+		m["hardware_version"] = *state.HardwareVersion
+	}
+	if state.IsConnectedToServer != nil {
+		m["is_connected_to_server"] = *state.IsConnectedToServer
 	}
 
 	return m
@@ -246,5 +333,75 @@ func (state *State) GetIsWebsocketAlive() bool {
 // SetWebsocketAlive - mutates field, returns itself
 func (state *State) SetWebsocketAlive(value bool) *State {
 	state.IsWebsocketAlive = &value
+	return state
+}
+
+func (state *State) SetMotionDetected(value bool) *State {
+	state.MotionDetected = &value
+	return state
+}
+
+func (state *State) SetSoundDetected(value bool) *State {
+	state.SoundDetected = &value
+	return state
+}
+
+func (state *State) SetLightLevel(value int32) *State {
+	state.LightLevel = &value
+	return state
+}
+
+func (state *State) SetNightLightOn(value bool) *State {
+	state.NightLightOn = &value
+	return state
+}
+
+func (state *State) SetNightLightTimeoutSec(value int32) *State {
+	state.NightLightTimeoutSec = &value
+	return state
+}
+
+func (state *State) SetNightVision(value bool) *State {
+	state.NightVision = &value
+	return state
+}
+
+func (state *State) SetSleepMode(value bool) *State {
+	state.SleepMode = &value
+	return state
+}
+
+func (state *State) SetStatusLightOn(value bool) *State {
+	state.StatusLightOn = &value
+	return state
+}
+
+func (state *State) SetMicMuteOn(value bool) *State {
+	state.MicMuteOn = &value
+	return state
+}
+
+func (state *State) SetVolume(value int32) *State {
+	state.Volume = &value
+	return state
+}
+
+func (state *State) SetMountingMode(value int32) *State {
+	state.MountingMode = &value
+	return state
+}
+
+func (state *State) SetFirmwareVersion(value string) *State {
+	state.FirmwareVersion = &value
+	return state
+}
+
+func (state *State) SetHardwareVersion(value string) *State {
+	state.HardwareVersion = &value
+	return state
+}
+
+func (state *State) SetIsConnectedToServer(value bool) *State {
+	state.IsConnectedToServer = &value
 	return state
 }

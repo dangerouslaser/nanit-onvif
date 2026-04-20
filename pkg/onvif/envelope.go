@@ -19,7 +19,15 @@ const (
 	prefix1 = `<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tt="http://www.onvif.org/ver10/schema" xmlns:tds="http://www.onvif.org/ver10/device/wsdl" xmlns:trt="http://www.onvif.org/ver10/media/wsdl">`
 	prefix2 = `<s:Body>`
 	suffix  = `</s:Body></s:Envelope>`
+
+	eventsPrefix = `<?xml version="1.0" encoding="utf-8"?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tt="http://www.onvif.org/ver10/schema" xmlns:tev="http://www.onvif.org/ver10/events/wsdl" xmlns:wsnt="http://docs.oasis-open.org/wsn/b-2" xmlns:wsa="http://www.w3.org/2005/08/addressing" xmlns:tns1="http://www.onvif.org/ver10/topics">`
 )
+
+func NewEventsEnvelope() *Envelope {
+	e := &Envelope{buf: make([]byte, 0, 2048)}
+	e.Append(eventsPrefix, prefix2)
+	return e
+}
 
 func NewEnvelope() *Envelope {
 	e := &Envelope{buf: make([]byte, 0, 1024)}

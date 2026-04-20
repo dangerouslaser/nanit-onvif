@@ -43,6 +43,8 @@ func main() {
 			PollingInterval: utils.EnvVarSeconds("NANIT_EVENTS_POLLING_INTERVAL", 30*time.Second),
 			// 300 second (5 min) default message timeout (unseen messages are ignored once they are this old)
 			MessageTimeout: utils.EnvVarSeconds("NANIT_EVENTS_MESSAGE_TIMEOUT", 300*time.Second),
+			// How long motion_detected / sound_detected stay true after an event
+			DetectedHold: utils.EnvVarSeconds("NANIT_EVENTS_DETECTED_HOLD", 30*time.Second),
 		},
 	}
 
@@ -81,9 +83,11 @@ func main() {
 
 	if utils.EnvVarBool("NANIT_ONVIF_ENABLED", true) {
 		opts.ONVIF = &app.ONVIFOpts{
-			ListenAddr: utils.EnvVarStr("NANIT_ONVIF_ADDR", ":8089"),
-			Username:   utils.EnvVarStr("NANIT_ONVIF_USERNAME", ""),
-			Password:   utils.EnvVarStr("NANIT_ONVIF_PASSWORD", ""),
+			ListenAddr:    utils.EnvVarStr("NANIT_ONVIF_ADDR", ":8089"),
+			Username:      utils.EnvVarStr("NANIT_ONVIF_USERNAME", ""),
+			Password:      utils.EnvVarStr("NANIT_ONVIF_PASSWORD", ""),
+			EventsEnabled: utils.EnvVarBool("NANIT_ONVIF_EVENTS", true),
+			EventHold:     utils.EnvVarSeconds("NANIT_ONVIF_EVENT_HOLD", 30*time.Second),
 		}
 	}
 
@@ -95,11 +99,14 @@ func main() {
 
 	if utils.EnvVarBool("NANIT_MQTT_ENABLED", false) {
 		opts.MQTT = &mqtt.Opts{
-			BrokerURL:   utils.EnvVarReqStr("NANIT_MQTT_BROKER_URL"),
-			ClientID:    utils.EnvVarStr("NANIT_MQTT_CLIENT_ID", "nanit"),
-			Username:    utils.EnvVarStr("NANIT_MQTT_USERNAME", ""),
-			Password:    utils.EnvVarStr("NANIT_MQTT_PASSWORD", ""),
-			TopicPrefix: utils.EnvVarStr("NANIT_MQTT_PREFIX", "nanit"),
+			BrokerURL:         utils.EnvVarReqStr("NANIT_MQTT_BROKER_URL"),
+			ClientID:          utils.EnvVarStr("NANIT_MQTT_CLIENT_ID", "nanit"),
+			Username:          utils.EnvVarStr("NANIT_MQTT_USERNAME", ""),
+			Password:          utils.EnvVarStr("NANIT_MQTT_PASSWORD", ""),
+			TopicPrefix:       utils.EnvVarStr("NANIT_MQTT_PREFIX", "nanit"),
+			HADiscovery:       utils.EnvVarBool("NANIT_MQTT_HA_DISCOVERY", false),
+			HADiscoveryPrefix: utils.EnvVarStr("NANIT_MQTT_HA_DISCOVERY_PREFIX", "homeassistant"),
+			Commands:          utils.EnvVarBool("NANIT_MQTT_COMMANDS", false),
 		}
 	}
 

@@ -13,16 +13,104 @@ import (
 func processSensorData(babyUID string, sensorData []*client.SensorData, stateManager *baby.StateManager) {
 	// Parse sensor update
 	stateUpdate := baby.State{}
-	for _, sensorDataSet := range sensorData {
-		if *sensorDataSet.SensorType == client.SensorType_TEMPERATURE {
-			stateUpdate.SetTemperatureMilli(*sensorDataSet.ValueMilli)
-		} else if *sensorDataSet.SensorType == client.SensorType_HUMIDITY {
-			stateUpdate.SetHumidityMilli(*sensorDataSet.ValueMilli)
-		} else if *sensorDataSet.SensorType == client.SensorType_NIGHT {
-			stateUpdate.SetIsNight(*sensorDataSet.Value == 1)
+	for _, s := range sensorData {
+		if s.SensorType == nil {
+			continue
+		}
+		switch *s.SensorType {
+		case client.SensorType_TEMPERATURE:
+			if s.ValueMilli != nil {
+				stateUpdate.SetTemperatureMilli(*s.ValueMilli)
+			}
+		case client.SensorType_HUMIDITY:
+			if s.ValueMilli != nil {
+				stateUpdate.SetHumidityMilli(*s.ValueMilli)
+			}
+		case client.SensorType_NIGHT:
+			if s.Value != nil {
+				stateUpdate.SetIsNight(*s.Value == 1)
+			}
+		case client.SensorType_LIGHT:
+			if s.Value != nil {
+				stateUpdate.SetLightLevel(*s.Value)
+			}
+		case client.SensorType_MOTION:
+			if s.IsAlert != nil {
+				stateUpdate.SetMotionDetected(*s.IsAlert)
+			}
+			if s.Timestamp != nil && *s.IsAlert {
+				stateUpdate.SetMotionTimestamp(*s.Timestamp)
+			}
+		case client.SensorType_SOUND:
+			if s.IsAlert != nil {
+				stateUpdate.SetSoundDetected(*s.IsAlert)
+			}
+			if s.Timestamp != nil && *s.IsAlert {
+				stateUpdate.SetSoundTimestamp(*s.Timestamp)
+			}
 		}
 	}
 
+	stateManager.Update(babyUID, stateUpdate)
+}
+
+func processControl(babyUID string, control *client.Control, stateManager *baby.StateManager) {
+	if control == nil {
+		return
+	}
+	stateUpdate := baby.State{}
+	if control.NightLight != nil {
+		stateUpdate.SetNightLightOn(*control.NightLight == client.Control_LIGHT_ON)
+	}
+	if control.NightLightTimeout != nil {
+		stateUpdate.SetNightLightTimeoutSec(*control.NightLightTimeout)
+	}
+	stateManager.Update(babyUID, stateUpdate)
+}
+
+func processSettings(babyUID string, settings *client.Settings, stateManager *baby.StateManager) {
+	if settings == nil {
+		return
+	}
+	stateUpdate := baby.State{}
+	if settings.NightVision != nil {
+		stateUpdate.SetNightVision(*settings.NightVision)
+	}
+	if settings.SleepMode != nil {
+		stateUpdate.SetSleepMode(*settings.SleepMode)
+	}
+	if settings.StatusLightOn != nil {
+		stateUpdate.SetStatusLightOn(*settings.StatusLightOn)
+	}
+	if settings.MicMuteOn != nil {
+		stateUpdate.SetMicMuteOn(*settings.MicMuteOn)
+	}
+	if settings.Volume != nil {
+		stateUpdate.SetVolume(*settings.Volume)
+	}
+	if settings.MountingMode != nil {
+		stateUpdate.SetMountingMode(*settings.MountingMode)
+	}
+	stateManager.Update(babyUID, stateUpdate)
+}
+
+func processStatus(babyUID string, status *client.Status, stateManager *baby.StateManager) {
+	if status == nil {
+		return
+	}
+	stateUpdate := baby.State{}
+	if status.CurrentVersion != nil {
+		stateUpdate.SetFirmwareVersion(*status.CurrentVersion)
+	}
+	if status.HardwareVersion != nil {
+		stateUpdate.SetHardwareVersion(*status.HardwareVersion)
+	}
+	if status.ConnectionToServer != nil {
+		stateUpdate.SetIsConnectedToServer(*status.ConnectionToServer == client.Status_CONNECTED)
+	}
+	if status.Mode != nil {
+		stateUpdate.SetMountingMode(int32(*status.Mode))
+	}
 	stateManager.Update(babyUID, stateUpdate)
 }
 

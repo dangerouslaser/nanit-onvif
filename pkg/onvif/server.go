@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"regexp"
 	"time"
+
+	"github.com/gregory-m/nanit/pkg/baby"
 )
 
 const ServiceGetServiceCapabilities = "GetServiceCapabilities"
@@ -72,8 +74,14 @@ func GetCapabilitiesResponse(host string) []byte {
 				<tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>
 			</tt:StreamingCapabilities>
 		</tt:Media>
+		<tt:Events>
+			<tt:XAddr>http://%s/onvif/events_service</tt:XAddr>
+			<tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport>
+			<tt:WSPullPointSupport>true</tt:WSPullPointSupport>
+			<tt:WSPausableSubscriptionManagerInterfaceSupport>false</tt:WSPausableSubscriptionManagerInterfaceSupport>
+		</tt:Events>
 	</tds:Capabilities>
-</tds:GetCapabilitiesResponse>`, host, host)
+</tds:GetCapabilitiesResponse>`, host, host, host)
 	return e.Bytes()
 }
 
@@ -90,7 +98,12 @@ func GetServicesResponse(host string) []byte {
 		<tds:XAddr>http://%s/onvif/media_service</tds:XAddr>
 		<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>
 	</tds:Service>
-</tds:GetServicesResponse>`, host, host)
+	<tds:Service>
+		<tds:Namespace>http://www.onvif.org/ver10/events/wsdl</tds:Namespace>
+		<tds:XAddr>http://%s/onvif/events_service</tds:XAddr>
+		<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>
+	</tds:Service>
+</tds:GetServicesResponse>`, host, host, host)
 	return e.Bytes()
 }
 
@@ -120,6 +133,28 @@ func GetSystemDateAndTimeResponse() []byte {
 		utc.Hour(), utc.Minute(), utc.Second(), utc.Year(), utc.Month(), utc.Day(),
 		loc.Hour(), loc.Minute(), loc.Second(), loc.Year(), loc.Month(), loc.Day(),
 	)
+	return e.Bytes()
+}
+
+// GetNetworkInterfacesResponse advertises a network interface with a stable
+// MAC derived from the first baby's UID. HA's ONVIF integration records this
+// MAC on the device's connections, which allows HA to auto-merge the ONVIF
+// device with the per-baby MQTT device (which advertises the same MAC).
+func GetNetworkInterfacesResponse(babies []baby.Baby) []byte {
+	e := NewEnvelope()
+	e.Append(`<tds:GetNetworkInterfacesResponse>`)
+	if len(babies) > 0 {
+		mac := baby.SyntheticMAC(babies[0].UID)
+		e.Appendf(`<tds:NetworkInterfaces token="eth0">
+		<tt:Enabled>true</tt:Enabled>
+		<tt:Info>
+			<tt:Name>eth0</tt:Name>
+			<tt:HwAddress>%s</tt:HwAddress>
+			<tt:MTU>1500</tt:MTU>
+		</tt:Info>
+	</tds:NetworkInterfaces>`, mac)
+	}
+	e.Append(`</tds:GetNetworkInterfacesResponse>`)
 	return e.Bytes()
 }
 
@@ -292,8 +327,7 @@ var responses = map[string]string{
 	DeviceSetSystemDateAndTime:     `<tds:SetSystemDateAndTimeResponse />`,
 	DeviceSystemReboot:             `<tds:SystemRebootResponse><tds:Message>OK</tds:Message></tds:SystemRebootResponse>`,
 
-	DeviceGetNetworkInterfaces: `<tds:GetNetworkInterfacesResponse />`,
-	DeviceGetNetworkProtocols:  `<tds:GetNetworkProtocolsResponse />`,
+	DeviceGetNetworkProtocols: `<tds:GetNetworkProtocolsResponse />`,
 	DeviceGetScopes: `<tds:GetScopesResponse>
 	<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef><tt:ScopeItem>onvif://www.onvif.org/name/nanit</tt:ScopeItem></tds:Scopes>
 	<tds:Scopes><tt:ScopeDef>Fixed</tt:ScopeDef><tt:ScopeItem>onvif://www.onvif.org/location/local</tt:ScopeItem></tds:Scopes>

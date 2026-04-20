@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -30,6 +31,9 @@ type App struct {
 	BabyStateManager *baby.StateManager
 	RestClient       *client.NanitClient
 	MQTTConnection   *mqtt.Connection
+
+	commandersMu sync.RWMutex
+	commanders   map[string]*babyCommander
 }
 
 // NewApp - constructor
@@ -130,6 +134,14 @@ func (app *App) Run(ctx utils.GracefulContext) {
 			log.Fatal().Err(err).Msg("Failed to parse RTSP listen address for ONVIF")
 		}
 		snapshotGen := snapshot.NewGenerator(rtspSrv)
+
+		var eventMgr *onvif.EventManager
+		if app.Opts.ONVIF.EventsEnabled {
+			eventMgr = onvif.NewEventManager(app.Opts.ONVIF.EventHold)
+			eventMgr.Start(app.BabyStateManager)
+			defer eventMgr.Stop()
+		}
+
 		handler := onvif.NewHandler(onvif.ServerConfig{
 			RTSPPort: rtspPort,
 			GetBabies: func() []baby.Baby {
@@ -140,6 +152,7 @@ func (app *App) Run(ctx utils.GracefulContext) {
 			GetSnapshot: func(babyUID string) ([]byte, error) {
 				return snapshotGen.Generate(context.Background(), babyUID)
 			},
+			Events: eventMgr,
 		})
 		onvifServer := &http.Server{
 			Addr:    app.Opts.ONVIF.ListenAddr,
@@ -161,8 +174,12 @@ func (app *App) Run(ctx utils.GracefulContext) {
 
 	// MQTT
 	if app.MQTTConnection != nil {
+		getBabies := func() []baby.Baby {
+			return app.SessionStore.Snapshot().Babies
+		}
+		app.MQTTConnection.CommandHandler = app.HandleMQTTCommand
 		ctx.RunAsChild(func(childCtx utils.GracefulContext) {
-			app.MQTTConnection.Run(app.BabyStateManager, childCtx)
+			app.MQTTConnection.Run(app.BabyStateManager, getBabies, childCtx)
 		})
 	}
 
@@ -207,6 +224,33 @@ func (app *App) handleBaby(baby baby.Baby, ctx utils.GracefulContext) {
 }
 
 func (app *App) pollMessages(babyUID string, babyStateManager *baby.StateManager, ctx utils.GracefulContext) {
+	hold := app.Opts.EventPolling.DetectedHold
+	if hold <= 0 {
+		hold = 30 * time.Second
+	}
+
+	// Per-field auto-clear timers so MotionDetected/SoundDetected flip back to
+	// false after `hold`, and re-triggers during the hold extend the window.
+	var timerMu sync.Mutex
+	timers := map[string]*time.Timer{}
+
+	trigger := func(field string, ts time.Time, setTrue func() baby.State, setFalse func() baby.State) {
+		babyStateManager.Update(babyUID, setTrue())
+
+		key := babyUID + ":" + field
+		timerMu.Lock()
+		if existing, ok := timers[key]; ok {
+			existing.Stop()
+		}
+		timers[key] = time.AfterFunc(hold, func() {
+			babyStateManager.Update(babyUID, setFalse())
+			timerMu.Lock()
+			delete(timers, key)
+			timerMu.Unlock()
+		})
+		timerMu.Unlock()
+	}
+
 	poll := func() {
 		newMessages, err := app.RestClient.FetchNewMessages(babyUID, app.Opts.EventPolling.MessageTimeout)
 		if err != nil {
@@ -214,11 +258,24 @@ func (app *App) pollMessages(babyUID string, babyStateManager *baby.StateManager
 			return
 		}
 		for _, msg := range newMessages {
+			ts := time.Time(msg.Time)
 			switch msg.Type {
 			case message.SoundEventMessageType:
-				go babyStateManager.NotifySoundSubscribers(babyUID, time.Time(msg.Time))
+				log.Info().Str("baby_uid", babyUID).Time("at", ts).Msg("Sound event detected")
+				trigger("sound", ts,
+					func() baby.State {
+						return *baby.NewState().SetSoundTimestamp(int32(ts.Unix())).SetSoundDetected(true)
+					},
+					func() baby.State { return *baby.NewState().SetSoundDetected(false) },
+				)
 			case message.MotionEventMessageType:
-				go babyStateManager.NotifyMotionSubscribers(babyUID, time.Time(msg.Time))
+				log.Info().Str("baby_uid", babyUID).Time("at", ts).Msg("Motion event detected")
+				trigger("motion", ts,
+					func() baby.State {
+						return *baby.NewState().SetMotionTimestamp(int32(ts.Unix())).SetMotionDetected(true)
+					},
+					func() baby.State { return *baby.NewState().SetMotionDetected(false) },
+				)
 			}
 		}
 	}
@@ -238,44 +295,59 @@ func (app *App) pollMessages(babyUID string, babyStateManager *baby.StateManager
 }
 
 func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, childCtx utils.GracefulContext) {
-	// Reading sensor data
+	// Register this connection as the current one for inbound commands.
+	commander := app.ensureCommander(babyUID)
+	commander.setConn(conn)
+	defer commander.setConn(nil)
+
+	// Reading sensor data, settings, control, and status
 	conn.RegisterMessageHandler(func(m *client.Message, conn *client.WebsocketConnection) {
-		// Sensor request initiated by us on start (or some other client, we don't care)
+		// Responses to requests we (or another client) initiated
 		if *m.Type == client.Message_RESPONSE && m.Response != nil {
-			if *m.Response.RequestType == client.RequestType_GET_SENSOR_DATA && len(m.Response.SensorData) > 0 {
-				processSensorData(babyUID, m.Response.SensorData, app.BabyStateManager)
+			switch m.Response.GetRequestType() {
+			case client.RequestType_GET_SENSOR_DATA:
+				if len(m.Response.SensorData) > 0 {
+					processSensorData(babyUID, m.Response.SensorData, app.BabyStateManager)
+				}
+			case client.RequestType_GET_SETTINGS, client.RequestType_PUT_SETTINGS:
+				processSettings(babyUID, m.Response.Settings, app.BabyStateManager)
+			case client.RequestType_GET_STATUS, client.RequestType_PUT_STATUS:
+				processStatus(babyUID, m.Response.Status, app.BabyStateManager)
 			}
-		} else
+		}
 
 		// Communication initiated from a cam
 		// Note: it sends the updates periodically on its own + whenever some significant change occurs
 		if *m.Type == client.Message_REQUEST && m.Request != nil {
-			if *m.Request.Type == client.RequestType_PUT_SENSOR_DATA && len(m.Request.SensorData_) > 0 {
-				processSensorData(babyUID, m.Request.SensorData_, app.BabyStateManager)
+			switch m.Request.GetType() {
+			case client.RequestType_PUT_SENSOR_DATA:
+				if len(m.Request.SensorData_) > 0 {
+					processSensorData(babyUID, m.Request.SensorData_, app.BabyStateManager)
+				}
+			case client.RequestType_PUT_CONTROL:
+				processControl(babyUID, m.Request.Control, app.BabyStateManager)
+			case client.RequestType_PUT_SETTINGS:
+				processSettings(babyUID, m.Request.Settings, app.BabyStateManager)
+			case client.RequestType_PUT_STATUS:
+				processStatus(babyUID, m.Request.Status, app.BabyStateManager)
 			}
 		}
 	})
 
-	// Ask for sensor data (initial request)
+	// Ask for sensor data, settings, and status (initial snapshot)
 	conn.SendRequest(client.RequestType_GET_SENSOR_DATA, &client.Request{
 		GetSensorData: &client.GetSensorData{
 			All: utils.ConstRefBool(true),
 		},
 	})
 
-	// Ask for status
-	// conn.SendRequest(client.RequestType_GET_STATUS, &client.Request{
-	// 	GetStatus_: &client.GetStatus{
-	// 		All: utils.ConstRefBool(true),
-	// 	},
-	// })
+	conn.SendRequest(client.RequestType_GET_SETTINGS, &client.Request{})
 
-	// Ask for logs
-	// conn.SendRequest(client.RequestType_GET_LOGS, &client.Request{
-	// 	GetLogs: &client.GetLogs{
-	// 		Url: utils.ConstRefStr("http://192.168.3.234:8080/log"),
-	// 	},
-	// })
+	conn.SendRequest(client.RequestType_GET_STATUS, &client.Request{
+		GetStatus_: &client.GetStatus{
+			All: utils.ConstRefBool(true),
+		},
+	})
 
 	var cleanup func()
 

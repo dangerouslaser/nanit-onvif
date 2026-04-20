@@ -61,6 +61,12 @@ type ONVIFOpts struct {
 	ListenAddr string
 	Username   string
 	Password   string
+
+	// EventsEnabled toggles the ONVIF Events (PullPoint) service.
+	EventsEnabled bool
+	// EventHold is how long motion/sound stays "active" after a REST-polled
+	// trigger. Websocket isAlert=false clears immediately regardless.
+	EventHold time.Duration
 }
 
 // WebOpts - options for the web UI dashboard
@@ -73,4 +79,7 @@ type EventPollingOpts struct {
 	Enabled         bool
 	PollingInterval time.Duration
 	MessageTimeout  time.Duration
+	// DetectedHold is how long motion_detected / sound_detected stay true
+	// after a REST-polled event before auto-clearing to false.
+	DetectedHold time.Duration
 }
