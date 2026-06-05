@@ -92,7 +92,7 @@ rtmp://your-server-ip:1935/local/<baby_uid>
 
 ## Home Assistant
 
-1. **ONVIF integration** — Settings → Devices & Services → Add → **ONVIF Device** → `your-server-ip:8089`. Creates the camera entity, snapshot, and motion/sound binary_sensors.
+1. **ONVIF integration** — Settings → Devices & Services → Add → **ONVIF Device** → `your-server-ip:8089`. Creates the camera entity, snapshot, and motion/sound binary_sensors. When the entry options appear, **uncheck "Enable webhooks for events (Push)"** — the proxy only supports PullPoint, and HA's webhook subscription path will fail entry setup.
 2. **MQTT integration** — already connected to your broker, make sure discovery is enabled. With `NANIT_MQTT_HA_DISCOVERY=true`, nanit publishes retained discovery configs that auto-create temperature, humidity, motion, sound, volume, firmware, night light, etc.
 3. **Merge** — nanit reports the same synthetic MAC on both sides, so HA automatically merges the ONVIF device and the MQTT device into one device card.
 4. **Commands** — with `NANIT_MQTT_COMMANDS=true`, writable fields (night light, volume, mic mute, sleep mode, status light, night vision) publish as switches and numbers you can actuate from HA.
@@ -214,6 +214,7 @@ go run ./cmd/nanit -l    # interactive login
 - Camera pushes the stream outbound — it must be able to reach `NANIT_RTMP_ADDR`.
 - Motion and sound events come from REST polling; latency is bounded by `NANIT_EVENTS_POLLING_INTERVAL`. Nanit does not push these over WebSocket.
 - ONVIF WS-Discovery (network autodiscovery) is not implemented. Add the device manually by host:port in HA / NVR.
+- Only PullPoint event subscriptions are implemented; WS-BaseNotification (push/webhook) is not. In Home Assistant, disable "Enable webhooks" on the ONVIF config entry.
 
 ## Credits
 
