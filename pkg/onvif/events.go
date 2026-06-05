@@ -254,6 +254,7 @@ const (
 	EventsPullMessages                = "PullMessages"
 	EventsRenew                       = "Renew"
 	EventsUnsubscribe                 = "Unsubscribe"
+	EventsSetSynchronizationPoint     = "SetSynchronizationPoint"
 )
 
 var subscriptionPathRX = regexp.MustCompile(`^/onvif/events/subscription/([a-f0-9]+)/?$`)
@@ -349,6 +350,8 @@ func (em *EventManager) HandleSubscription(w http.ResponseWriter, r *http.Reques
 		delete(em.subs, id)
 		em.mu.Unlock()
 		resp = unsubscribeResponse()
+	case EventsSetSynchronizationPoint:
+		resp = setSynchronizationPointResponse()
 	default:
 		http.Error(w, "not implemented", http.StatusNotImplemented)
 		return
@@ -434,6 +437,12 @@ func renewResponse(termAt time.Time) []byte {
 func unsubscribeResponse() []byte {
 	e := NewEventsEnvelope()
 	e.Append(`<wsnt:UnsubscribeResponse/>`)
+	return e.Bytes()
+}
+
+func setSynchronizationPointResponse() []byte {
+	e := NewEventsEnvelope()
+	e.Append(`<tev:SetSynchronizationPointResponse/>`)
 	return e.Bytes()
 }
 
