@@ -3,6 +3,7 @@ package rtmpserver
 import (
 	"net"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +16,21 @@ import (
 	"github.com/gregory-m/nanit/pkg/rtspserver"
 )
 
+// Opts - options of the RTMP server
+type Opts struct {
+	// ListenAddr is the address to listen on, e.g. ":1935"
+	ListenAddr string
+
+	// Path is the URL path streams are published under, e.g. "/local" for rtmp://host/local/{key}
+	Path string
+
+	// ResolveKey maps the stream key (the last segment of the URL) to a baby UID.
+	// If nil, the stream key is the baby UID.
+	ResolveKey func(streamKey string) (babyUID string, ok bool)
+}
+
 type rtmpHandler struct {
+	opts              Opts
 	babyStateManager  *baby.StateManager
 	rtspServer        *rtspserver.RTSPServer
 	broadcastersMu    sync.RWMutex
@@ -31,17 +46,17 @@ type rtspBridgeState struct {
 }
 
 // StartRTMPServer - Blocking server. If rtspSrv is non-nil, RTMP packets are bridged to RTSP.
-func StartRTMPServer(addr string, babyStateManager *baby.StateManager, rtspSrv *rtspserver.RTSPServer) {
-	lis, err := net.Listen("tcp", addr)
+func StartRTMPServer(opts Opts, babyStateManager *baby.StateManager, rtspSrv *rtspserver.RTSPServer) {
+	lis, err := net.Listen("tcp", opts.ListenAddr)
 	if err != nil {
-		log.Fatal().Str("addr", addr).Err(err).Msg("Unable to start RTMP server")
+		log.Fatal().Str("addr", opts.ListenAddr).Err(err).Msg("Unable to start RTMP server")
 		panic(err)
 	}
 
-	log.Info().Str("addr", addr).Msg("RTMP server started")
+	log.Info().Str("addr", opts.ListenAddr).Str("path", opts.Path).Msg("RTMP server started")
 
 	s := rtmp.NewServer()
-	s.HandleConn = newRtmpHandler(babyStateManager, rtspSrv).handleConnection
+	s.HandleConn = newRtmpHandler(opts, babyStateManager, rtspSrv).handleConnection
 
 	for {
 		nc, err := lis.Accept()
@@ -53,27 +68,46 @@ func StartRTMPServer(addr string, babyStateManager *baby.StateManager, rtspSrv *
 	}
 }
 
-func newRtmpHandler(babyStateManager *baby.StateManager, rtspSrv *rtspserver.RTSPServer) *rtmpHandler {
+func newRtmpHandler(opts Opts, babyStateManager *baby.StateManager, rtspSrv *rtspserver.RTSPServer) *rtmpHandler {
 	return &rtmpHandler{
+		opts:              opts,
 		broadcastersByUID: make(map[string]*broadcaster),
 		babyStateManager:  babyStateManager,
 		rtspServer:        rtspSrv,
 	}
 }
 
-var rtmpURLRX = regexp.MustCompile(`^/local/([a-z0-9_-]+)$`)
+var streamKeyRX = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// resolveBabyUID maps the path of an RTMP URL, {Path}/{stream key}, to the baby it belongs to. It has to
+// accept exactly the URLs the camera is told to publish to, which are built from the same path and key.
+func (s *rtmpHandler) resolveBabyUID(urlPath string) (string, bool) {
+	streamKey, ok := strings.CutPrefix(urlPath, strings.TrimRight(s.opts.Path, "/")+"/")
+	if !ok || !streamKeyRX.MatchString(streamKey) {
+		return "", false
+	}
+
+	if s.opts.ResolveKey != nil {
+		return s.opts.ResolveKey(streamKey)
+	}
+
+	if !baby.IsValidUID(streamKey) {
+		return "", false
+	}
+
+	return streamKey, true
+}
 
 func (s *rtmpHandler) handleConnection(c *rtmp.Conn, nc net.Conn) {
 	sublog := log.With().Stringer("client_addr", nc.RemoteAddr()).Logger()
 
-	submatch := rtmpURLRX.FindStringSubmatch(c.URL.Path)
-	if len(submatch) != 2 {
+	babyUID, ok := s.resolveBabyUID(c.URL.Path)
+	if !ok {
 		sublog.Warn().Str("path", c.URL.Path).Msg("Invalid RTMP stream requested")
 		nc.Close()
 		return
 	}
 
-	babyUID := submatch[1]
 	sublog = sublog.With().Str("baby_uid", babyUID).Logger()
 
 	if c.Publishing {
@@ -87,11 +121,7 @@ func (s *rtmpHandler) handleConnection(c *rtmp.Conn, nc net.Conn) {
 			pkt, err := c.ReadPacket()
 			if err != nil {
 				sublog.Warn().Err(err).Msg("Publisher stream closed unexpectedly")
-				s.babyStateManager.Update(babyUID, *baby.NewState().SetStreamState(baby.StreamState_Unhealthy))
 				s.closePublisher(babyUID, publisher)
-				if s.rtspServer != nil {
-					s.rtspServer.UnregisterStream(babyUID)
-				}
 				return
 			}
 
@@ -160,11 +190,21 @@ func (s *rtmpHandler) getNewSubscriber(babyUID string) (*subscriber, func()) {
 	return sub, func() { broadcaster.unsubscribe(sub) }
 }
 
+// closePublisher cleans up after a publisher whose connection ended.
+//
+// The stream is only torn down (marked unhealthy, RTSP stream unregistered) if b is still the baby's
+// current publisher. When the camera reconnects, the connection it replaced can linger for minutes before
+// it errors out; by then the stream state and the RTSP stream belong to the new publisher.
 func (s *rtmpHandler) closePublisher(babyUID string, b *broadcaster) {
+	// The lock is held across the teardown so that a publisher taking over at this moment (getNewPublisher)
+	// marks the stream alive and registers its RTSP stream strictly after it, not in the middle.
 	s.broadcastersMu.Lock()
-	if currBroadcaster, hasExistingBroadcaster := s.broadcastersByUID[babyUID]; hasExistingBroadcaster {
-		if currBroadcaster == b {
-			delete(s.broadcastersByUID, babyUID)
+	if s.broadcastersByUID[babyUID] == b {
+		delete(s.broadcastersByUID, babyUID)
+
+		s.babyStateManager.Update(babyUID, *baby.NewState().SetStreamState(baby.StreamState_Unhealthy))
+		if s.rtspServer != nil {
+			s.rtspServer.UnregisterStream(babyUID)
 		}
 	}
 	s.broadcastersMu.Unlock()

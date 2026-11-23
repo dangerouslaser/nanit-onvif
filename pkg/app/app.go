@@ -34,6 +34,8 @@ type App struct {
 
 	commandersMu sync.RWMutex
 	commanders   map[string]*babyCommander
+
+	warnStreamKeyIgnored sync.Once
 }
 
 // NewApp - constructor
@@ -169,7 +171,11 @@ func (app *App) Run(ctx utils.GracefulContext) {
 
 	// RTMP
 	if app.Opts.RTMP != nil {
-		go rtmpserver.StartRTMPServer(app.Opts.RTMP.ListenAddr, app.BabyStateManager, rtspSrv)
+		go rtmpserver.StartRTMPServer(rtmpserver.Opts{
+			ListenAddr: app.Opts.RTMP.ListenAddr,
+			Path:       app.Opts.RTMP.Path,
+			ResolveKey: app.babyUIDForStreamKey,
+		}, app.BabyStateManager, rtspSrv)
 	}
 
 	// MQTT
@@ -404,15 +410,57 @@ func (app *App) getRemoteStreamURL(babyUID string) string {
 	return fmt.Sprintf("rtmps://media-secured.nanit.com/nanit/%v.%v", babyUID, app.SessionStore.Snapshot().AuthToken)
 }
 
+// getLocalStreamURL returns the RTMP URL the camera of the given baby is told to publish to.
 func (app *App) getLocalStreamURL(babyUID string) string {
 	if app.Opts.RTMP != nil {
 		tpl := "rtmp://{publicAddr}{path}/{key}"
-		key := babyUID
-		if app.Opts.RTMP.Key != "" {
-			key = app.Opts.RTMP.Key
-		}
-		return strings.NewReplacer("{publicAddr}", app.Opts.RTMP.PublicAddr, "{path}", app.Opts.RTMP.Path, "{key}", key).Replace(tpl)
+		return strings.NewReplacer("{publicAddr}", app.Opts.RTMP.PublicAddr, "{path}", app.Opts.RTMP.Path, "{key}", app.streamKeyForBaby(babyUID)).Replace(tpl)
 	}
 
 	return ""
+}
+
+// useCustomStreamKey reports whether the configured stream key replaces the baby UID in stream URLs.
+// One key can only name one stream, so it is ignored when the account has several cameras.
+func (app *App) useCustomStreamKey() bool {
+	if app.Opts.RTMP == nil || app.Opts.RTMP.Key == "" {
+		return false
+	}
+
+	if len(app.SessionStore.Snapshot().Babies) > 1 {
+		app.warnStreamKeyIgnored.Do(func() {
+			log.Warn().Msg("NANIT_RTMP_KEY is ignored: one key cannot name the streams of several cameras, using baby UIDs instead")
+		})
+		return false
+	}
+
+	return true
+}
+
+// streamKeyForBaby returns the last segment of the baby's stream URL.
+func (app *App) streamKeyForBaby(babyUID string) string {
+	if app.useCustomStreamKey() {
+		return app.Opts.RTMP.Key
+	}
+
+	return babyUID
+}
+
+// babyUIDForStreamKey is the inverse of streamKeyForBaby, used by the RTMP server to find out whose
+// stream is being published or subscribed to.
+func (app *App) babyUIDForStreamKey(streamKey string) (string, bool) {
+	if !app.useCustomStreamKey() {
+		if !baby.IsValidUID(streamKey) {
+			return "", false
+		}
+
+		return streamKey, true
+	}
+
+	babies := app.SessionStore.Snapshot().Babies
+	if streamKey != app.Opts.RTMP.Key || len(babies) != 1 {
+		return "", false
+	}
+
+	return babies[0].UID, true
 }
