@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -114,15 +115,17 @@ func main() {
 		log.Info().Msgf("Event polling enabled with an interval of %v", opts.EventPolling.PollingInterval)
 	}
 
+	// SIGTERM is what `docker stop`, compose and systemd send; without it the process is killed with no
+	// clean up (streaming is not stopped, MQTT is not disconnected, a session write may be cut short).
 	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
 	instance := app.NewApp(opts)
 
 	runner := utils.RunWithGracefulCancel(instance.Run)
 
 	<-interrupt
-	log.Warn().Msg("Received interrupt signal, terminating")
+	log.Warn().Msg("Received termination signal, terminating")
 
 	waitForCleanup := make(chan struct{}, 1)
 
@@ -133,7 +136,7 @@ func main() {
 
 	select {
 	case <-interrupt:
-		log.Fatal().Msg("Received another interrupt signal, forcing termination without clean up")
+		log.Fatal().Msg("Received another termination signal, forcing termination without clean up")
 	case <-waitForCleanup:
 		log.Info().Msg("Clean exit")
 		return

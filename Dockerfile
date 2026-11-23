@@ -5,7 +5,8 @@ RUN go mod tidy
 RUN CGO_ENABLED=0 go build -ldflags "-X main.GitCommit=$(git rev-parse --short HEAD)" -o ./bin/nanit ./cmd/nanit/*.go
 
 FROM alpine
-RUN mkdir -p /app/data
+# ffmpeg decodes the cached keyframe into the JPEG served as the ONVIF snapshot
+RUN apk add --no-cache ffmpeg && mkdir -p /app/data
 COPY --from=build /app/bin/nanit /app/bin/nanit
 WORKDIR /app
 EXPOSE 1935

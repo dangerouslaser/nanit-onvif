@@ -113,8 +113,7 @@ func (manager *WebsocketConnectionManager) run(attempt utils.AttemptContext) {
 
 	var once sync.Once // Just because gowebsocket is buggy and can invoke OnDisconnect multiple times :-/
 
-	socket := gowebsocket.New(url)
-	socket.RequestHeader.Set("Authorization", auth)
+	socket := newSocket(url, auth)
 
 	// Handle new connection
 	socket.OnConnected = func(socket gowebsocket.Socket) {
@@ -197,6 +196,19 @@ func (manager *WebsocketConnectionManager) run(attempt utils.AttemptContext) {
 		log.Debug().Msg("Closing websocket")
 		socket.Close()
 	}
+}
+
+// newSocket creates the websocket used to talk to Nanit, with the server certificate verified.
+func newSocket(url string, auth string) gowebsocket.Socket {
+	socket := gowebsocket.New(url)
+	socket.RequestHeader.Set("Authorization", auth)
+
+	// Despite its name, UseSSL does not decide whether TLS is used (the wss:// scheme does). gowebsocket
+	// copies it into tls.Config.InsecureSkipVerify, and defaults it to true, i.e. no certificate
+	// verification at all. We send the account's auth token over this connection, so turn that off.
+	socket.ConnectionOptions.UseSSL = false
+
+	return socket
 }
 
 func notifyReadyHandler(handler WebsocketConnectionHandler, state readyState) {
