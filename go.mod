@@ -7,6 +7,7 @@ require (
 	github.com/bluenviron/mediacommon/v2 v2.8.1
 	github.com/eclipse/paho.mqtt.golang v1.3.0
 	github.com/golang/protobuf v1.4.3
+	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.3.0
 	github.com/notedit/rtmp v0.0.2
 	github.com/rs/zerolog v1.20.0
@@ -19,7 +20,6 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.16 // indirect
