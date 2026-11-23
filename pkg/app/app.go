@@ -353,8 +353,11 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 
 	// Local streaming
 	if app.Opts.RTMP != nil {
+		requestTracker := newStreamRequestTracker(time.Now())
 		initializeLocalStreaming := func() {
-			requestLocalStreaming(babyUID, app.getLocalStreamURL(babyUID), client.Streaming_STARTED, conn, app.BabyStateManager)
+			requestTracker.track(func() {
+				requestLocalStreaming(childCtx, babyUID, app.getLocalStreamURL(babyUID), client.Streaming_STARTED, conn, app.BabyStateManager)
+			})
 		}
 
 		// Watch for stream liveness change
@@ -375,7 +378,7 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 			// Stop local streaming
 			state := app.BabyStateManager.GetBabyState(babyUID)
 			if state.GetIsWebsocketAlive() && state.GetStreamState() == baby.StreamState_Alive {
-				requestLocalStreaming(babyUID, app.getLocalStreamURL(babyUID), client.Streaming_STOPPED, conn, app.BabyStateManager)
+				requestLocalStreaming(childCtx, babyUID, app.getLocalStreamURL(babyUID), client.Streaming_STOPPED, conn, app.BabyStateManager)
 			}
 		}
 
@@ -386,6 +389,9 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 				go initializeLocalStreaming()
 			}
 		}
+
+		// Safety net for a request that is acknowledged (or fails) without a publisher ever connecting
+		go runPublisherWatchdog(childCtx, babyUID, app.BabyStateManager, requestTracker, initializeLocalStreaming)
 	}
 
 	<-childCtx.Done()
