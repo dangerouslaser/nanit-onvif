@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -64,19 +65,47 @@ type messagesResponsePayload struct {
 type NanitClient struct {
 	RefreshToken string
 	SessionStore *session.Store
+
+	// authMu allows one token refresh at a time. The refresh token is single-use: each refresh replaces
+	// it, so two refreshes racing with the same one leave the loser with a "refresh token expired".
+	authMu sync.Mutex
 }
 
 // MaybeAuthorize - Performs authorization if we don't have token or we assume it is expired
 func (c *NanitClient) MaybeAuthorize(force bool) error {
-	sess := c.SessionStore.Snapshot()
-	if force || sess.AuthToken == "" || time.Since(sess.AuthTime) > AuthTokenTimelife {
+	if force {
 		return c.Authorize()
+	}
+
+	sess := c.SessionStore.Snapshot()
+	if sess.AuthToken == "" || time.Since(sess.AuthTime) > AuthTokenTimelife {
+		return c.reauthorize(sess.AuthToken)
 	}
 	return nil
 }
 
 // Authorize - performs authorization attempt
 func (c *NanitClient) Authorize() error {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+
+	return c.authorizeLocked()
+}
+
+// reauthorize replaces an auth token the caller found missing or unusable. If someone else has replaced
+// it in the meantime, there is nothing left to do.
+func (c *NanitClient) reauthorize(staleToken string) error {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+
+	if current := c.SessionStore.Snapshot().AuthToken; current != "" && current != staleToken {
+		return nil
+	}
+
+	return c.authorizeLocked()
+}
+
+func (c *NanitClient) authorizeLocked() error {
 	// Seed the session refresh token from the CLI-provided one if missing.
 	c.SessionStore.Update(func(s *session.Session) {
 		if len(s.RefreshToken) == 0 {
@@ -196,7 +225,7 @@ func (c *NanitClient) FetchAuthorized(req *http.Request, data interface{}) error
 	for i := 0; i < 2; i++ {
 		token := c.SessionStore.Snapshot().AuthToken
 		if token == "" {
-			if err := c.Authorize(); err != nil {
+			if err := c.reauthorize(token); err != nil {
 				return err
 			}
 			continue
@@ -211,7 +240,7 @@ func (c *NanitClient) FetchAuthorized(req *http.Request, data interface{}) error
 		if res.StatusCode == 401 {
 			res.Body.Close()
 			log.Info().Msg("Token might be expired. Will try to re-authenticate.")
-			if err := c.Authorize(); err != nil {
+			if err := c.reauthorize(token); err != nil {
 				return err
 			}
 			continue
@@ -293,7 +322,10 @@ func (c *NanitClient) FetchNewMessages(babyUID string, defaultMessageTimeout tim
 		return fetchedMessages[i].Time.Time().After(fetchedMessages[j].Time.Time())
 	})
 
-	lastSeenMessageTime := c.SessionStore.Snapshot().LastSeenMessageTime
+	// Tracked per baby: with one time for all of them, a recent message of one baby hid the older,
+	// not yet seen messages of every other.
+	sess := c.SessionStore.Snapshot()
+	lastSeenMessageTime := sess.LastSeenMessage(babyUID)
 	messageTimeoutTime := lastSeenMessageTime
 	log.Debug().Msgf("Last seen message time was %s", lastSeenMessageTime)
 
@@ -306,7 +338,7 @@ func (c *NanitClient) FetchNewMessages(babyUID string, defaultMessageTimeout tim
 	newest := fetchedMessages[0].Time.Time()
 	if lastSeenMessageTime.Before(newest) {
 		c.SessionStore.Update(func(s *session.Session) {
-			s.LastSeenMessageTime = newest
+			s.SetLastSeenMessage(babyUID, newest)
 		})
 	}
 

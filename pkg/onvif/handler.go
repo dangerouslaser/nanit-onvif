@@ -67,10 +67,10 @@ func NewHandler(config ServerConfig) http.Handler {
 
 		switch action {
 		case DeviceGetCapabilities:
-			resp = GetCapabilitiesResponse(host)
+			resp = GetCapabilitiesResponse(host, config.Events != nil)
 
 		case DeviceGetServices:
-			resp = GetServicesResponse(host)
+			resp = GetServicesResponse(host, config.Events != nil)
 
 		case DeviceGetDeviceInformation:
 			// Stable serial based on the first baby's UID so HA's ONVIF

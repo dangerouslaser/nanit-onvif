@@ -18,12 +18,40 @@ const Revision = 3
 
 // Session - application session data container
 type Session struct {
-	Revision            int         `json:"revision"`
-	AuthToken           string      `json:"authToken"`
-	AuthTime            time.Time   `json:"authTime"`
-	Babies              []baby.Baby `json:"babies"`
-	RefreshToken        string      `json:"refreshToken"`
-	LastSeenMessageTime time.Time   `json:"lastSeenMessageTime"`
+	Revision     int         `json:"revision"`
+	AuthToken    string      `json:"authToken"`
+	AuthTime     time.Time   `json:"authTime"`
+	Babies       []baby.Baby `json:"babies"`
+	RefreshToken string      `json:"refreshToken"`
+
+	// LastSeenMessageTime is the single time older versions kept for all babies together. It is only
+	// read now, as the starting point for a baby that has no entry of its own yet.
+	LastSeenMessageTime time.Time `json:"lastSeenMessageTime"`
+
+	// LastSeenMessageTimes holds, per baby UID, the time of the newest message already seen.
+	// Use LastSeenMessage and SetLastSeenMessage.
+	LastSeenMessageTimes map[string]time.Time `json:"lastSeenMessageTimes,omitempty"`
+}
+
+// LastSeenMessage returns the time of the newest message already seen for the given baby.
+func (s *Session) LastSeenMessage(babyUID string) time.Time {
+	if t, ok := s.LastSeenMessageTimes[babyUID]; ok {
+		return t
+	}
+
+	return s.LastSeenMessageTime
+}
+
+// SetLastSeenMessage records the time of the newest message seen for the given baby.
+func (s *Session) SetLastSeenMessage(babyUID string, t time.Time) {
+	// Snapshots of the session share the map, so it is replaced, never changed in place.
+	times := make(map[string]time.Time, len(s.LastSeenMessageTimes)+1)
+	for uid, seen := range s.LastSeenMessageTimes {
+		times[uid] = seen
+	}
+	times[babyUID] = t
+
+	s.LastSeenMessageTimes = times
 }
 
 // Store - application session store context. All reads and writes of Session

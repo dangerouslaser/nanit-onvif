@@ -45,10 +45,11 @@ type haEntityBase struct {
 	PayloadOn         string           `json:"payload_on,omitempty"`
 	PayloadOff        string           `json:"payload_off,omitempty"`
 	// Command-capable fields (switches/numbers); Phase 3 wires these up.
-	CommandTopic string  `json:"command_topic,omitempty"`
-	Min          float64 `json:"min,omitempty"`
-	Max          float64 `json:"max,omitempty"`
-	Step         float64 `json:"step,omitempty"`
+	// Min is a pointer because 0 is a real minimum: left out, Home Assistant assumes 1.
+	CommandTopic string   `json:"command_topic,omitempty"`
+	Min          *float64 `json:"min,omitempty"`
+	Max          float64  `json:"max,omitempty"`
+	Step         float64  `json:"step,omitempty"`
 }
 
 // discoveryConfigs builds the full set of HA discovery entities for one baby.
@@ -221,7 +222,7 @@ func writableNumber(commands bool, key, name, unit, icon, cat string,
 	}
 	if commands {
 		base.CommandTopic = commandTopic(key)
-		base.Min = min
+		base.Min = &min
 		base.Max = max
 		base.Step = step
 		return entry{"number", key, base}
