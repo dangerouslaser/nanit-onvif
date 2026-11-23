@@ -114,6 +114,34 @@ func processStatus(babyUID string, status *client.Status, stateManager *baby.Sta
 	stateManager.Update(babyUID, stateUpdate)
 }
 
+// publisherGracePeriod is how long we wait, after the cloud ACKs a streaming request, for the camera's
+// RTMP publisher to actually connect. Nanit's cloud accepts the request even when it cannot reach the
+// camera, and nothing else ever flips the stream Unhealthy if no publisher connects — so without this
+// watch a stale "Requested" state hangs silently (Frigate 404s) until the bridge is restarted.
+const publisherGracePeriod = 2 * time.Minute
+
+// watchForPublisher re-requests local streaming if no publisher connects within publisherGracePeriod of
+// the cloud acknowledging our request. It runs as a goroutine per successful request: if the stream is
+// already Alive (publisher arrived) or the websocket is gone (a new session will request itself), it does
+// nothing. Otherwise it marks the request failed and re-runs requestLocalStreaming, whose own retry loop
+// handles subsequent failures. Retries are naturally paced at >= publisherGracePeriod apart.
+func watchForPublisher(babyUID string, targetURL string, streamingStatus client.Streaming_Status, conn *client.WebsocketConnection, stateManager *baby.StateManager) {
+	time.Sleep(publisherGracePeriod)
+
+	state := stateManager.GetBabyState(babyUID)
+	if !state.GetIsWebsocketAlive() {
+		return
+	}
+	if state.GetStreamState() == baby.StreamState_Alive {
+		return
+	}
+
+	log.Warn().Str("baby_uid", babyUID).Dur("grace", publisherGracePeriod).Msg(
+		"No stream publisher connected after successful request, re-requesting local streaming")
+	stateManager.Update(babyUID, *baby.NewState().SetStreamRequestState(baby.StreamRequestState_RequestFailed))
+	requestLocalStreaming(babyUID, targetURL, streamingStatus, conn, stateManager)
+}
+
 func requestLocalStreaming(babyUID string, targetURL string, streamingStatus client.Streaming_Status, conn *client.WebsocketConnection, stateManager *baby.StateManager) {
 	for {
 		switch streamingStatus {
@@ -140,7 +168,7 @@ func requestLocalStreaming(babyUID string, targetURL string, streamingStatus cli
 			if err.Error() == "Forbidden: Number of Mobile App connections above limit, declining connection" {
 				log.Warn().Err(err).Msg("Too many app connections, waiting for local connection to become available...")
 				stateManager.Update(babyUID, *baby.NewState().SetStreamRequestState(baby.StreamRequestState_RequestFailed))
-                                time.Sleep(300 * time.Second)
+				time.Sleep(300 * time.Second)
 				continue
 			} else if err.Error() != "Request timeout" {
 				if stateManager.GetBabyState(babyUID).GetStreamState() == baby.StreamState_Alive {
@@ -165,6 +193,8 @@ func requestLocalStreaming(babyUID string, targetURL string, streamingStatus cli
 		} else {
 			log.Info().Msg("Local streaming successfully requested")
 			stateManager.Update(babyUID, *baby.NewState().SetStreamRequestState(baby.StreamRequestState_Requested))
+			// Watch for the stall where the cloud ACKs but no publisher ever connects.
+			go watchForPublisher(babyUID, targetURL, streamingStatus, conn, stateManager)
 			return
 		}
 	}
