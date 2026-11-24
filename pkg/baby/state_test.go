@@ -51,3 +51,14 @@ func TestStateMergeDifferent(t *testing.T) {
 	assert.Equal(t, 20.0, s3.GetHumidity())
 	assert.Equal(t, baby.StreamState_Alive, s3.GetStreamState())
 }
+
+func TestPlaybackStateMerge(t *testing.T) {
+	initial := baby.NewState().SetPlaybackOn(true)
+	assert.Equal(t, true, initial.AsMap(false)["playback_on"])
+	assert.Same(t, initial, initial.Merge(baby.NewState()))
+	assert.Same(t, initial, initial.Merge(baby.NewState().SetPlaybackOn(true)))
+	stopped := initial.Merge(baby.NewState().SetPlaybackOn(false))
+	assert.NotSame(t, initial, stopped)
+	assert.Equal(t, false, stopped.AsMap(false)["playback_on"])
+	assert.Equal(t, true, initial.AsMap(false)["playback_on"])
+}

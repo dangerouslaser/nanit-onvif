@@ -33,6 +33,7 @@ type haAvailability struct {
 type haEntityBase struct {
 	Name              string           `json:"name"`
 	UniqueID          string           `json:"unique_id"`
+	DefaultEntityID   string           `json:"default_entity_id,omitempty"`
 	StateTopic        string           `json:"state_topic"`
 	Availability      []haAvailability `json:"availability,omitempty"`
 	Device            haDevice         `json:"device"`
@@ -75,6 +76,11 @@ func discoveryConfigs(topicPrefix, babyUID, babyName string, commands bool) []di
 	}}
 	uid := func(key string) string {
 		return fmt.Sprintf("%s_%s_%s", topicPrefix, babyUID, key)
+	}
+	sound := writableSwitch(commands, "playback_on", "Sound", "mdi:waveform", "",
+		stateTopic, commandTopic, uid, availability, device)
+	if commands {
+		sound.entity.DefaultEntityID = fmt.Sprintf("switch.%s_%s_sound", topicPrefix, babyUID)
 	}
 
 	entries := []entry{
@@ -122,6 +128,7 @@ func discoveryConfigs(topicPrefix, babyUID, babyName string, commands bool) []di
 		}},
 		writableSwitch(commands, "night_light_on", "Night light", "mdi:lightbulb", "",
 			stateTopic, commandTopic, uid, availability, device),
+		sound,
 		writableSwitch(commands, "night_vision", "Night vision", "mdi:weather-night", "diagnostic",
 			stateTopic, commandTopic, uid, availability, device),
 		writableSwitch(commands, "sleep_mode", "Sleep mode", "mdi:sleep", "diagnostic",

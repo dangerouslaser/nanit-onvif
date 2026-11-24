@@ -2,6 +2,7 @@ FROM golang:1.26 AS build
 ADD . /app/
 WORKDIR /app
 RUN go mod tidy
+RUN go test ./pkg/client ./pkg/app ./pkg/baby ./pkg/mqtt
 RUN CGO_ENABLED=0 go build -ldflags "-X main.GitCommit=$(git rev-parse --short HEAD)" -o ./bin/nanit ./cmd/nanit/*.go
 
 FROM alpine

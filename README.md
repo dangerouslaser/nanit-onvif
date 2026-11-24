@@ -9,7 +9,7 @@ Fork of the original [nanit](https://gitlab.com/adam.stanek/nanit) project.
 - **RTSP server** — H.264 video + AAC audio passthrough over standard RTSP
 - **ONVIF server** — profile discovery, stream URI, snapshots, and **PullPoint events** for motion and sound (so NVRs get real motion/audio triggers, not just a dumb stream)
 - **ONVIF snapshots** — `/onvif/snapshot/<uid>.jpg`, produced from the last RTSP keyframe via ffmpeg (no second stream required)
-- **MQTT publishing** with **Home Assistant MQTT discovery** — one HA device per baby, ~17 sensors and controls auto-created (temperature, humidity, light level, motion, sound, firmware, mounting mode, sleep mode, night light, status light, mic mute, volume, night vision, etc.)
+- **MQTT publishing** with **Home Assistant MQTT discovery** — one HA device per baby, 18 sensors and controls auto-created (temperature, humidity, light level, motion, sound detection, sound playback, firmware, mounting mode, sleep mode, night light, status light, mic mute, volume, night vision, etc.)
 - **MQTT commands** — publish to `set/{field}` topics to flip night light, toggle mic, change volume, etc.; in HA these render as switches and numbers you can actuate
 - **Unified HA device** — the ONVIF camera and MQTT entities auto-merge into a single device card via a shared synthetic MAC, so camera + snapshot + sensors + switches all live together
 - **Embedded RTMP ingest** — receives the camera's outbound stream; no external RTMP server or go2rtc needed
@@ -154,6 +154,7 @@ State (retained, QoS 0):
 <prefix>/babies/<uid>/is_night            true | false
 <prefix>/babies/<uid>/night_light_on      true | false
 <prefix>/babies/<uid>/night_light_timeout seconds
+<prefix>/babies/<uid>/playback_on         true | false
 <prefix>/babies/<uid>/night_vision        true | false
 <prefix>/babies/<uid>/sleep_mode          true | false
 <prefix>/babies/<uid>/status_light_on     true | false
@@ -171,12 +172,24 @@ Commands (when `NANIT_MQTT_COMMANDS=true`):
 ```
 <prefix>/babies/<uid>/set/night_light_on       true | false | ON | OFF
 <prefix>/babies/<uid>/set/night_light_timeout  seconds
+<prefix>/babies/<uid>/set/playback_on          true | false
 <prefix>/babies/<uid>/set/night_vision         true | false
 <prefix>/babies/<uid>/set/sleep_mode           true | false
 <prefix>/babies/<uid>/set/status_light_on      true | false
 <prefix>/babies/<uid>/set/mic_mute_on          true | false
 <prefix>/babies/<uid>/set/volume               0..100
 ```
+
+The **Sound** switch starts the camera's built-in `White Noise.wav` on `true`
+and stops sound playback on `false`. Playback continues until stopped; volume
+is left at the camera's existing setting. Its state reflects whether sound is
+playing, including other tracks selected in the Nanit app. State comes from
+camera reports, with readback after commands and polling every 30 seconds;
+missing reports never become a false "off". The separate Sound binary sensor
+still means detected room sound.
+
+Rebuild the bridge to discover the new switch. The Docker build runs playback,
+state, MQTT discovery, and application tests before building the executable.
 
 ## How it works
 

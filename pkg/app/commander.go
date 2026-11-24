@@ -82,6 +82,19 @@ func (app *App) HandleMQTTCommand(babyUID, field, payload string) {
 
 	var err error
 	switch field {
+	case "playback_on":
+		on, valid := parseBool(payload)
+		if !valid {
+			err = errors.New("sound command must be a boolean")
+			break
+		}
+		err = c.send(client.RequestType_PUT_PLAYBACK, &client.Request{
+			Playback: client.WhiteNoisePlayback(on),
+		})
+		if err == nil {
+			// Use camera readback, including changes made in the Nanit app.
+			err = c.send(client.RequestType_GET_PLAYBACK, &client.Request{})
+		}
 	case "night_light_on":
 		if on, ok := parseBool(payload); ok {
 			enum := client.Control_LIGHT_OFF

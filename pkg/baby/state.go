@@ -39,6 +39,7 @@ type State struct {
 	// Control state
 	NightLightOn         *bool
 	NightLightTimeoutSec *int32
+	PlaybackOn           *bool
 
 	// Settings state
 	NightVision   *bool
@@ -79,6 +80,7 @@ func (state *State) Merge(u *State) *State {
 	mergeInt32(&out.LightLevel, u.LightLevel, &changed)
 	mergeBool(&out.NightLightOn, u.NightLightOn, &changed)
 	mergeInt32(&out.NightLightTimeoutSec, u.NightLightTimeoutSec, &changed)
+	mergeBool(&out.PlaybackOn, u.PlaybackOn, &changed)
 	mergeBool(&out.NightVision, u.NightVision, &changed)
 	mergeBool(&out.SleepMode, u.SleepMode, &changed)
 	mergeBool(&out.StatusLightOn, u.StatusLightOn, &changed)
@@ -199,6 +201,9 @@ func (state *State) AsMap(includeInternal bool) map[string]interface{} {
 	}
 	if state.NightLightTimeoutSec != nil {
 		m["night_light_timeout"] = int64(*state.NightLightTimeoutSec)
+	}
+	if state.PlaybackOn != nil {
+		m["playback_on"] = *state.PlaybackOn
 	}
 	if state.NightVision != nil {
 		m["night_vision"] = *state.NightVision
@@ -358,6 +363,11 @@ func (state *State) SetNightLightOn(value bool) *State {
 
 func (state *State) SetNightLightTimeoutSec(value int32) *State {
 	state.NightLightTimeoutSec = &value
+	return state
+}
+
+func (state *State) SetPlaybackOn(value bool) *State {
+	state.PlaybackOn = &value
 	return state
 }
 
