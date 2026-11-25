@@ -341,6 +341,15 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 				processSettings(babyUID, m.Response.Settings, app.BabyStateManager)
 			case client.RequestType_GET_STATUS, client.RequestType_PUT_STATUS:
 				processStatus(babyUID, m.Response.Status, app.BabyStateManager)
+			case client.RequestType_GET_PLAYBACK, client.RequestType_PUT_PLAYBACK:
+				if m.Response.GetStatusCode() == 200 {
+					playback, err := client.ResponsePlayback(m.Response)
+					if err != nil {
+						log.Warn().Err(err).Str("baby_uid", babyUID).Msg("Invalid playback report")
+					} else {
+						processPlayback(babyUID, playback, app.BabyStateManager)
+					}
+				}
 			}
 		}
 
@@ -358,6 +367,8 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 				processSettings(babyUID, m.Request.Settings, app.BabyStateManager)
 			case client.RequestType_PUT_STATUS:
 				processStatus(babyUID, m.Request.Status, app.BabyStateManager)
+			case client.RequestType_PUT_PLAYBACK:
+				processPlayback(babyUID, m.Request.Playback, app.BabyStateManager)
 			}
 		}
 	})
@@ -370,6 +381,9 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 	})
 
 	conn.SendRequest(client.RequestType_GET_SETTINGS, &client.Request{})
+	childCtx.RunAsChild(func(ctx utils.GracefulContext) {
+		pollPlayback(babyUID, conn, ctx)
+	})
 
 	conn.SendRequest(client.RequestType_GET_STATUS, &client.Request{
 		GetStatus_: &client.GetStatus{

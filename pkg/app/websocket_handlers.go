@@ -69,6 +69,18 @@ func processControl(babyUID string, control *client.Control, stateManager *baby.
 	stateManager.Update(babyUID, stateUpdate)
 }
 
+func processPlayback(babyUID string, playback *client.Playback, stateManager *baby.StateManager) {
+	if playback == nil || playback.Status == nil {
+		return
+	}
+	switch *playback.Status {
+	case client.Playback_STARTED:
+		stateManager.Update(babyUID, *baby.NewState().SetPlaybackOn(true))
+	case client.Playback_STOPPED:
+		stateManager.Update(babyUID, *baby.NewState().SetPlaybackOn(false))
+	}
+}
+
 func processSettings(babyUID string, settings *client.Settings, stateManager *baby.StateManager) {
 	if settings == nil {
 		return
