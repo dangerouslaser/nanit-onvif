@@ -32,6 +32,9 @@ type App struct {
 	RestClient       *client.NanitClient
 	MQTTConnection   *mqtt.Connection
 
+	babyRunnersMu sync.Mutex
+	babyRunners   map[string]utils.GracefulRunner
+
 	commandersMu sync.RWMutex
 	commanders   map[string]*babyCommander
 
@@ -82,12 +85,9 @@ func (app *App) Run(ctx utils.GracefulContext) {
 			webConfig.MQTTBroker = app.Opts.MQTT.BrokerURL
 		}
 		webConfig.OnLogin = func() {
-			for _, babyInfo := range app.SessionStore.Snapshot().Babies {
-				_babyInfo := babyInfo
-				ctx.RunAsChild(func(childCtx utils.GracefulContext) {
-					app.handleBaby(_babyInfo, childCtx)
-				})
-			}
+			// In the background: stopping the running handlers can take a while, and the login request
+			// should not wait for it.
+			go app.startBabies(ctx)
 		}
 		webHandler := web.NewHandler(webConfig)
 		webServer := &http.Server{
@@ -190,20 +190,42 @@ func (app *App) Run(ctx utils.GracefulContext) {
 	}
 
 	// Start reading the data from the stream
-	babies := app.SessionStore.Snapshot().Babies
-	for _, babyInfo := range babies {
-		_babyInfo := babyInfo
-		ctx.RunAsChild(func(childCtx utils.GracefulContext) {
-			app.handleBaby(_babyInfo, childCtx)
-		})
-	}
+	app.startBabies(ctx)
 
 	// Start serving content over HTTP
 	if app.Opts.HTTPEnabled {
-		go serve(babies, app.Opts.DataDirectories)
+		go serve(app.SessionStore.Snapshot().Babies, app.Opts.DataDirectories)
 	}
 
 	<-ctx.Done()
+}
+
+// startBabies starts the handlers (websocket, event polling) of every baby in the session.
+//
+// It runs at startup and again after each web login. A baby whose handlers are already running gets them
+// stopped first, so there is never more than one set per baby: a second websocket would use up the
+// camera's two-connection limit and duplicate every request. Restarting, rather than leaving the running
+// set alone, means a login takes effect at once; after an expired refresh token the old handlers can be
+// sitting in a retry cooldown of up to an hour.
+func (app *App) startBabies(ctx utils.GracefulContext) {
+	app.babyRunnersMu.Lock()
+	defer app.babyRunnersMu.Unlock()
+
+	if app.babyRunners == nil {
+		app.babyRunners = make(map[string]utils.GracefulRunner)
+	}
+
+	for _, babyInfo := range app.SessionStore.Snapshot().Babies {
+		if runner, isRunning := app.babyRunners[babyInfo.UID]; isRunning {
+			log.Info().Str("baby_uid", babyInfo.UID).Msg("Restarting baby handlers")
+			runner.Cancel() // waits for the clean up
+		}
+
+		_babyInfo := babyInfo
+		app.babyRunners[babyInfo.UID] = ctx.RunAsChild(func(childCtx utils.GracefulContext) {
+			app.handleBaby(_babyInfo, childCtx)
+		})
+	}
 }
 
 func (app *App) handleBaby(baby baby.Baby, ctx utils.GracefulContext) {
@@ -366,8 +388,9 @@ func (app *App) runWebsocket(babyUID string, conn *client.WebsocketConnection, c
 			})
 		}
 
-		// Watch for stream liveness change
-		unsubscribe := app.BabyStateManager.Subscribe(func(updatedBabyUID string, stateUpdate baby.State) {
+		// Watch for stream liveness change. Changes only: the state the stream is in right now is handled
+		// by the check below, and being told about it here as well would request streaming twice.
+		unsubscribe := app.BabyStateManager.SubscribeChanges(func(updatedBabyUID string, stateUpdate baby.State) {
 			// Do another streaming request if stream just turned unhealthy
 			if updatedBabyUID == babyUID && stateUpdate.StreamState != nil && *stateUpdate.StreamState == baby.StreamState_Unhealthy {
 				// Prevent duplicate request if we already received failure

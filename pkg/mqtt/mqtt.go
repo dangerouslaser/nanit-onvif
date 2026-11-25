@@ -65,6 +65,28 @@ func runMqtt(conn *Connection, attempt utils.AttemptContext) {
 	opts.SetPassword(conn.Opts.Password)
 	opts.SetCleanSession(false)
 
+	// Subscribe to command topics. Topic shape: {prefix}/babies/{uid}/set/{field}
+	//
+	// Done in the on-connect handler, which also runs after every automatic reconnect: a broker that
+	// restarted without persistence has forgotten the subscription, and commands would silently stop.
+	if conn.Opts.Commands && conn.CommandHandler != nil {
+		cmdTopic := fmt.Sprintf("%s/babies/+/set/+", conn.Opts.TopicPrefix)
+		opts.SetOnConnectHandler(func(client MQTT.Client) {
+			token := client.Subscribe(cmdTopic, 0, func(_ MQTT.Client, msg MQTT.Message) {
+				babyUID, field, ok := parseCommandTopic(msg.Topic())
+				if !ok {
+					return
+				}
+				conn.CommandHandler(babyUID, field, string(msg.Payload()))
+			})
+			if token.Wait(); token.Error() != nil {
+				log.Error().Err(token.Error()).Str("topic", cmdTopic).Msg("Failed to subscribe to MQTT command topics")
+			} else {
+				log.Info().Str("topic", cmdTopic).Msg("MQTT command subscription active")
+			}
+		})
+	}
+
 	client := MQTT.NewClient(opts)
 	if token := client.Connect(); token.Wait() && token.Error() != nil {
 		log.Error().Str("broker_url", conn.Opts.BrokerURL).Err(token.Error()).Msg("Unable to connect to MQTT broker")
@@ -73,29 +95,6 @@ func runMqtt(conn *Connection, attempt utils.AttemptContext) {
 	}
 
 	log.Info().Str("broker_url", conn.Opts.BrokerURL).Msg("Successfully connected to MQTT broker")
-
-	// Subscribe to command topics. Topic shape: {prefix}/babies/{uid}/set/{field}
-	if conn.Opts.Commands && conn.CommandHandler != nil {
-		cmdTopic := fmt.Sprintf("%s/babies/+/set/+", conn.Opts.TopicPrefix)
-		token := client.Subscribe(cmdTopic, 0, func(_ MQTT.Client, msg MQTT.Message) {
-			parts := strings.Split(msg.Topic(), "/")
-			// Expected layout: [prefix, "babies", uid, "set", field]
-			if len(parts) < 5 {
-				return
-			}
-			if parts[len(parts)-4] != "babies" || parts[len(parts)-2] != "set" {
-				return
-			}
-			babyUID := parts[len(parts)-3]
-			field := parts[len(parts)-1]
-			conn.CommandHandler(babyUID, field, string(msg.Payload()))
-		})
-		if token.Wait(); token.Error() != nil {
-			log.Error().Err(token.Error()).Str("topic", cmdTopic).Msg("Failed to subscribe to MQTT command topics")
-		} else {
-			log.Info().Str("topic", cmdTopic).Msg("MQTT command subscription active")
-		}
-	}
 
 	// Retained so HA subscribers pick up the last-known value on subscribe
 	// instead of showing "unknown" until the next state change. Works for
@@ -200,4 +199,18 @@ func runMqtt(conn *Connection, attempt utils.AttemptContext) {
 	log.Debug().Msg("Closing MQTT connection on interrupt")
 	unsubscribe()
 	client.Disconnect(250)
+}
+
+// parseCommandTopic splits a command topic, {prefix}/babies/{uid}/set/{field}, into its baby UID and
+// field. The prefix may itself contain slashes.
+func parseCommandTopic(topic string) (babyUID string, field string, ok bool) {
+	parts := strings.Split(topic, "/")
+	if len(parts) < 5 {
+		return "", "", false
+	}
+	if parts[len(parts)-4] != "babies" || parts[len(parts)-2] != "set" {
+		return "", "", false
+	}
+
+	return parts[len(parts)-3], parts[len(parts)-1], true
 }

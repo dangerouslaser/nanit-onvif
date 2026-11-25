@@ -59,7 +59,9 @@ func GetRequestAction(b []byte) string {
 	return string(m[1])
 }
 
-func GetCapabilitiesResponse(host string) []byte {
+// GetCapabilitiesResponse lists the services of this device. The Events service is only advertised when
+// it is actually served, otherwise clients subscribe to an endpoint that answers 404.
+func GetCapabilitiesResponse(host string, eventsEnabled bool) []byte {
 	e := NewEnvelope()
 	e.Appendf(`<tds:GetCapabilitiesResponse>
 	<tds:Capabilities>
@@ -73,19 +75,24 @@ func GetCapabilitiesResponse(host string) []byte {
 				<tt:RTP_TCP>false</tt:RTP_TCP>
 				<tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>
 			</tt:StreamingCapabilities>
-		</tt:Media>
+		</tt:Media>`, host, host)
+	if eventsEnabled {
+		e.Appendf(`
 		<tt:Events>
 			<tt:XAddr>http://%s/onvif/events_service</tt:XAddr>
 			<tt:WSSubscriptionPolicySupport>false</tt:WSSubscriptionPolicySupport>
 			<tt:WSPullPointSupport>true</tt:WSPullPointSupport>
 			<tt:WSPausableSubscriptionManagerInterfaceSupport>false</tt:WSPausableSubscriptionManagerInterfaceSupport>
-		</tt:Events>
+		</tt:Events>`, host)
+	}
+	e.Append(`
 	</tds:Capabilities>
-</tds:GetCapabilitiesResponse>`, host, host, host)
+</tds:GetCapabilitiesResponse>`)
 	return e.Bytes()
 }
 
-func GetServicesResponse(host string) []byte {
+// GetServicesResponse lists the services of this device, see GetCapabilitiesResponse.
+func GetServicesResponse(host string, eventsEnabled bool) []byte {
 	e := NewEnvelope()
 	e.Appendf(`<tds:GetServicesResponse>
 	<tds:Service>
@@ -97,13 +104,17 @@ func GetServicesResponse(host string) []byte {
 		<tds:Namespace>http://www.onvif.org/ver10/media/wsdl</tds:Namespace>
 		<tds:XAddr>http://%s/onvif/media_service</tds:XAddr>
 		<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>
-	</tds:Service>
+	</tds:Service>`, host, host)
+	if eventsEnabled {
+		e.Appendf(`
 	<tds:Service>
 		<tds:Namespace>http://www.onvif.org/ver10/events/wsdl</tds:Namespace>
 		<tds:XAddr>http://%s/onvif/events_service</tds:XAddr>
 		<tds:Version><tt:Major>2</tt:Major><tt:Minor>5</tt:Minor></tds:Version>
-	</tds:Service>
-</tds:GetServicesResponse>`, host, host, host)
+	</tds:Service>`, host)
+	}
+	e.Append(`
+</tds:GetServicesResponse>`)
 	return e.Bytes()
 }
 

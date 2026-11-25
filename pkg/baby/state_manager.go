@@ -63,11 +63,22 @@ func (manager *StateManager) Update(babyUID string, stateUpdate State) {
 	manager.notifySubscribers(babyUID, stateUpdate)
 }
 
-// Subscribe - registers function to be called on every update.
+// Subscribe - registers function to be called on every update. The subscriber
+// is first sent the current state of every baby.
 // Returns unsubscribe function. Each subscriber runs on its own goroutine
 // with a bounded queue; events are dropped (with a warn log) if a
 // subscriber falls behind.
 func (manager *StateManager) Subscribe(callback func(babyUID string, state State)) func() {
+	return manager.subscribe(callback, true)
+}
+
+// SubscribeChanges - like Subscribe, but the subscriber is only called for
+// updates made after it subscribed, not with the current state.
+func (manager *StateManager) SubscribeChanges(callback func(babyUID string, state State)) func() {
+	return manager.subscribe(callback, false)
+}
+
+func (manager *StateManager) subscribe(callback func(babyUID string, state State), prime bool) func() {
 	worker := &subscriberWorker{
 		queue:    make(chan stateEvent, 64),
 		callback: callback,
@@ -90,11 +101,13 @@ func (manager *StateManager) Subscribe(callback func(babyUID string, state State
 	manager.subscribersMutex.Unlock()
 
 	// Prime the new subscriber with current state for each baby.
-	manager.stateMutex.RLock()
-	for babyUID, babyState := range manager.babiesByUID {
-		enqueue(worker, stateEvent{babyUID, babyState})
+	if prime {
+		manager.stateMutex.RLock()
+		for babyUID, babyState := range manager.babiesByUID {
+			enqueue(worker, stateEvent{babyUID, babyState})
+		}
+		manager.stateMutex.RUnlock()
 	}
-	manager.stateMutex.RUnlock()
 
 	var once sync.Once
 	return func() {

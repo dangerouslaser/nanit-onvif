@@ -39,14 +39,14 @@ func processSensorData(babyUID string, sensorData []*client.SensorData, stateMan
 			if s.IsAlert != nil {
 				stateUpdate.SetMotionDetected(*s.IsAlert)
 			}
-			if s.Timestamp != nil && *s.IsAlert {
+			if s.Timestamp != nil && s.GetIsAlert() {
 				stateUpdate.SetMotionTimestamp(*s.Timestamp)
 			}
 		case client.SensorType_SOUND:
 			if s.IsAlert != nil {
 				stateUpdate.SetSoundDetected(*s.IsAlert)
 			}
-			if s.Timestamp != nil && *s.IsAlert {
+			if s.Timestamp != nil && s.GetIsAlert() {
 				stateUpdate.SetSoundTimestamp(*s.Timestamp)
 			}
 		}
