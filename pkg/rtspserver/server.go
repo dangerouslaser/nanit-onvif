@@ -192,7 +192,7 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 		return
 	}
 
-	rtpTimestamp := uint32(pts.Seconds() * 90000)
+	rtpTimestamp := rtpTimestampAt(pts, 90000)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if entry.closed {
@@ -202,6 +202,16 @@ func (s *RTSPServer) WriteH264(babyUID string, nalus [][]byte, pts time.Duration
 		pkt.Timestamp = rtpTimestamp
 		entry.stream.WritePacketRTP(entry.videoMedia, pkt)
 	}
+}
+
+// rtpTimestampAt converts a presentation time to an RTP timestamp at the given clock rate.
+//
+// RTP timestamps are 32 bits and wrap around, which at 90 kHz happens every 13h15m. The arithmetic is
+// done in integers and truncated: converting an out-of-range float to uint32 is implementation-defined in
+// Go, and saturates on arm64, which would freeze the timestamp at its maximum from the first wrap on.
+func rtpTimestampAt(pts time.Duration, clockRate int64) uint32 {
+	ticks := int64(pts/time.Second)*clockRate + int64(pts%time.Second)*clockRate/int64(time.Second)
+	return uint32(ticks)
 }
 
 // GetKeyframe returns the most recent H.264 IDR access unit (annex-B encoded

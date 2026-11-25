@@ -10,6 +10,11 @@ import (
 
 var validUID = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
+// IsValidUID reports whether babyUID looks like a baby UID.
+func IsValidUID(babyUID string) bool {
+	return validUID.MatchString(babyUID)
+}
+
 // EnsureValidBabyUID - Checks that Baby UID does not contain any bad characters
 // This is necessary because we use it as part of file paths
 func EnsureValidBabyUID(babyUID string) {

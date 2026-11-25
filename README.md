@@ -108,8 +108,8 @@ rtmp://your-server-ip:1935/local/<baby_uid>
 | **RTMP** | | |
 | `NANIT_RTMP_ENABLED` | `true` | Enable embedded RTMP server |
 | `NANIT_RTMP_ADDR` | *(required)* | Public IP:port reachable from camera |
-| `NANIT_RTMP_PATH` | `/local` | RTMP path |
-| `NANIT_RTMP_KEY` | *(baby UID)* | RTMP stream key |
+| `NANIT_RTMP_PATH` | `/local` | RTMP path (RTSP is always served at `/local/<baby UID>`) |
+| `NANIT_RTMP_KEY` | *(baby UID)* | RTMP stream key; ignored when the account has more than one camera |
 | **RTSP** | | |
 | `NANIT_RTSP_ENABLED` | `true` | Enable embedded RTSP server |
 | `NANIT_RTSP_ADDR` | `:8554` | RTSP listen address |
