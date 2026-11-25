@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,17 @@ var ErrNoKeyframe = errors.New("no keyframe available")
 type Generator struct {
 	provider KeyframeProvider
 	timeout  time.Duration
+	encode   func(ctx context.Context, keyframe []byte) ([]byte, error)
+
+	// mu allows one ffmpeg at a time and guards cache: clients polling the snapshot together decode a
+	// keyframe once instead of forking a process each.
+	mu    sync.Mutex
+	cache map[string]cachedSnapshot
+}
+
+type cachedSnapshot struct {
+	keyframe []byte
+	jpeg     []byte
 }
 
 // NewGenerator creates a snapshot Generator that reads keyframes from provider.
@@ -28,19 +40,44 @@ func NewGenerator(provider KeyframeProvider) *Generator {
 	return &Generator{
 		provider: provider,
 		timeout:  5 * time.Second,
+		encode:   encodeJPEG,
+		cache:    make(map[string]cachedSnapshot),
 	}
 }
 
 // Generate returns a JPEG-encoded snapshot for the given baby.
 func (g *Generator) Generate(ctx context.Context, babyUID string) ([]byte, error) {
 	kf, ok := g.provider.GetKeyframe(babyUID)
-	if !ok {
+	if !ok || len(kf) == 0 {
 		return nil, ErrNoKeyframe
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if cached, ok := g.cache[babyUID]; ok && sameSlice(cached.keyframe, kf) {
+		return cached.jpeg, nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, g.timeout)
 	defer cancel()
 
+	jpeg, err := g.encode(ctx, kf)
+	if err != nil {
+		return nil, err
+	}
+
+	g.cache[babyUID] = cachedSnapshot{keyframe: kf, jpeg: jpeg}
+	return jpeg, nil
+}
+
+// sameSlice reports whether a and b are the very same slice, not merely equal: the provider hands out
+// the keyframe it has stored until a new one replaces it.
+func sameSlice(a, b []byte) bool {
+	return len(a) == len(b) && len(a) > 0 && &a[0] == &b[0]
+}
+
+func encodeJPEG(ctx context.Context, keyframe []byte) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-hide_banner",
 		"-loglevel", "error",
@@ -51,7 +88,7 @@ func (g *Generator) Generate(ctx context.Context, babyUID string) ([]byte, error
 		"-f", "image2",
 		"pipe:1",
 	)
-	cmd.Stdin = bytes.NewReader(kf)
+	cmd.Stdin = bytes.NewReader(keyframe)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

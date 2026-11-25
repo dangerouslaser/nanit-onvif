@@ -105,23 +105,60 @@ func (store *Store) saveLocked() {
 
 	log.Trace().Str("filename", store.Filename).Msg("Storing app session to the file")
 
-	f, err := os.OpenFile(store.Filename, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to open app session file for writing")
-		return
-	}
-
-	defer f.Close()
-
 	data, err := json.Marshal(store.session)
 	if err != nil {
 		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to marshal contents of app session file")
 		return
 	}
 
-	if _, err := f.Write(data); err != nil {
-		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to write to app session file")
+	if err := writeFileAtomic(store.Filename, data); err != nil {
+		log.Error().Str("filename", store.Filename).Err(err).Msg("Unable to write app session file")
 	}
+}
+
+// sessionFileMode keeps the session file, which holds the refresh token, readable by its owner only.
+const sessionFileMode = 0600
+
+// writeFileAtomic replaces filename with data by writing a temporary file next to it and renaming that
+// over it, so a crash or kill mid-write leaves the previous contents instead of an empty or partial file.
+// Where that is not possible it falls back to writing the file in place: a file that is itself a mount
+// point (e.g. a single-file Docker bind mount) cannot be renamed over.
+func writeFileAtomic(filename string, data []byte) error {
+	if err := replaceFile(filename, data); err == nil {
+		return nil
+	}
+
+	if err := os.WriteFile(filename, data, sessionFileMode); err != nil {
+		return err
+	}
+	return os.Chmod(filename, sessionFileMode)
+}
+
+func replaceFile(filename string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(filename), filepath.Base(filename)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(sessionFileMode)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, filename)
+	}
+	if err != nil {
+		os.Remove(tmpName)
+	}
+
+	return err
 }
 
 // InitSessionStore - Initializes new application session store
